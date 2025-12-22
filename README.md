@@ -1,4 +1,4 @@
-*This repository has been brought to Lovable as part of acquiring Molnett. It is not actively maintained.*
+> **This repository has been brought to Lovable as part of acquiring Molnett. It is not actively maintained.**
 
 # Neon Kubernetes Operator
 
