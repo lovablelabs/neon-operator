@@ -1,3 +1,5 @@
+*This repository has been brought to Lovable as part of acquiring Molnett. It is not actively maintained.*
+
 # Neon Kubernetes Operator
 
 A Kubernetes operator for managing self-hosted [Neon](https://neon.com) Postgres database clusters. This operator enables you to manage all necessary compoents of Neon's control plane on Kubernetes (in cloud and on-premises).
