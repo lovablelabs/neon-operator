@@ -89,7 +89,7 @@ type ComputeHookNotifyRequest struct {
 // Role represents a database role configuration
 type Role struct {
 	Name              string      `json:"name"`
-	EncryptedPassword string      `json:"encrypted_password"`
+	EncryptedPassword *string     `json:"encrypted_password"`
 	Options           interface{} `json:"options"`
 }
 
@@ -366,6 +366,13 @@ func GenerateComputeSpec(
 		}
 	}
 
+	credentialsSecret, err := getCredentialsSecret(ctx, k8sClient, computeID, deployment.Namespace)
+	if err != nil {
+		log.Error("Failed to get compute credentials secret", "compute_id", computeID, "error", err)
+		return nil, err
+	}
+	passwordMD5 := string(credentialsSecret.Data[CredentialsPasswordMD5])
+
 	spec := &ComputeSpecResponse{
 		Spec: ComputeSpec{
 			FormatVersion:         1.0,
@@ -375,8 +382,13 @@ func GenerateComputeSpec(
 				Name:      project.Name,
 				Roles: []Role{
 					{
+						Name:              "cloud_admin",
+						EncryptedPassword: stringPtr(passwordMD5),
+						Options:           nil,
+					},
+					{
 						Name:              "postgres",
-						EncryptedPassword: "b093c0d3b281ba6da1eacc608620abd8",
+						EncryptedPassword: nil,
 						Options:           nil,
 					},
 				},
@@ -507,6 +519,25 @@ func findProjectAndBranch(
 	}
 
 	return project, branch, nil
+}
+
+func getCredentialsSecret(
+	ctx context.Context,
+	k8sClient client.Client,
+	computeID, namespace string,
+) (*corev1.Secret, error) {
+	secretName := CredentialsSecretName(computeID)
+	secret := &corev1.Secret{}
+
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, secret); err != nil {
+		return nil, fmt.Errorf("failed to get compute credentials secret %s: %w", secretName, err)
+	}
+
+	if len(secret.Data[CredentialsPasswordMD5]) == 0 {
+		return nil, fmt.Errorf("compute credentials secret %s missing %s", secretName, CredentialsPasswordMD5)
+	}
+
+	return secret, nil
 }
 
 func getJWTKeysFromSecret(
