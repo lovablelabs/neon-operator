@@ -64,7 +64,7 @@ func Deployment(branch *neonv1alpha1.Branch, project *neonv1alpha1.Project) *app
 								fmt.Sprintf(
 									"echo \"$INITIAL_SPEC_JSON\" > /var/spec.json && "+
 										"/usr/local/bin/compute_ctl --pgdata /.neon/data/pgdata "+
-										"--connstr=postgresql://cloud_admin:@0.0.0.0:55433/postgres "+
+										"--connstr=postgresql://cloud_admin:$CLOUD_ADMIN_PASSWORD@0.0.0.0:55433/postgres "+
 										"--compute-id %s -p http://neon-controlplane.neon:8081 "+
 										"--pgbin /usr/local/bin/postgres",
 									branch.Name,
@@ -99,6 +99,17 @@ func Deployment(branch *neonv1alpha1.Branch, project *neonv1alpha1.Project) *app
 												Name: fmt.Sprintf("%s-compute-spec", branch.Name),
 											},
 											Key: "spec.json",
+										},
+									},
+								},
+								{
+									Name: "CLOUD_ADMIN_PASSWORD",
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{
+												Name: CredentialsSecretName(branch.Name),
+											},
+											Key: CredentialsPasswordKey,
 										},
 									},
 								},

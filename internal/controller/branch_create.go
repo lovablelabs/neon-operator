@@ -22,6 +22,15 @@ import (
 func (r *BranchReconciler) createBranchResources(ctx context.Context, branch *neonv1alpha1.Branch, project *neonv1alpha1.Project) error {
 	log := logf.FromContext(ctx)
 
+	if err := r.ensureBranchCredentialAnnotation(ctx, branch); err != nil {
+		return err
+	}
+
+	log.Info("Reconciling branch credentials Secret")
+	if err := r.reconcileCredentialsSecret(ctx, branch, project); err != nil {
+		return err
+	}
+
 	log.Info("Reconciling branch ConfigMap")
 	if err := r.reconcileConfigMap(ctx, branch, project); err != nil {
 		return err
@@ -40,6 +49,75 @@ func (r *BranchReconciler) createBranchResources(ctx context.Context, branch *ne
 	log.Info("Reconciling branch postgres Service")
 	if err := r.reconcilePostgresService(ctx, branch, project); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (r *BranchReconciler) ensureBranchCredentialAnnotation(ctx context.Context, branch *neonv1alpha1.Branch) error {
+	secretName := compute.CredentialsSecretName(branch.Name)
+
+	if branch.Annotations != nil && branch.Annotations[compute.BranchCredentialsSecretAnnotation] == secretName {
+		return nil
+	}
+
+	current := &neonv1alpha1.Branch{}
+	if err := r.Get(ctx, types.NamespacedName{Name: branch.Name, Namespace: branch.Namespace}, current); err != nil {
+		return fmt.Errorf("failed to load branch for annotation patch: %w", err)
+	}
+
+	updated := current.DeepCopy()
+	if updated.Annotations == nil {
+		updated.Annotations = map[string]string{}
+	}
+	updated.Annotations[compute.BranchCredentialsSecretAnnotation] = secretName
+
+	if err := r.Patch(ctx, updated, client.MergeFrom(current), &client.PatchOptions{FieldManager: utils.FieldManager}); err != nil {
+		return fmt.Errorf("failed to patch branch credentials annotation: %w", err)
+	}
+
+	branch.Annotations = updated.Annotations
+	return nil
+}
+
+func (r *BranchReconciler) reconcileCredentialsSecret(ctx context.Context, branch *neonv1alpha1.Branch, project *neonv1alpha1.Project) error {
+	log := logf.FromContext(ctx)
+
+	var currentSecret corev1.Secret
+	secretName := compute.CredentialsSecretName(branch.Name)
+	getErr := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: branch.Namespace}, &currentSecret)
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		return fmt.Errorf("failed to get branch credentials Secret: %w", getErr)
+	}
+
+	if apierrors.IsNotFound(getErr) {
+		intendedSecret, err := compute.CredentialsSecret(branch, project)
+		if err != nil {
+			return err
+		}
+
+		err = ctrl.SetControllerReference(branch, intendedSecret, r.Scheme)
+		if err != nil {
+			return fmt.Errorf("failed to set controller reference for branch credentials Secret: %w", err)
+		}
+
+		if err := r.Create(ctx, intendedSecret, &client.CreateOptions{FieldManager: utils.FieldManager}); err != nil {
+			return fmt.Errorf("failed to create branch credentials Secret: %w", err)
+		}
+		log.Info("Branch credentials Secret created", "name", intendedSecret.Name)
+		return nil
+	}
+
+	if !compute.CredentialsDataIsValid(currentSecret.Data) {
+		healedData, err := compute.BuildCredentialsData(currentSecret.Data)
+		if err != nil {
+			return err
+		}
+		currentSecret.Data = healedData
+		if err := r.Update(ctx, &currentSecret, &client.UpdateOptions{FieldManager: utils.FieldManager}); err != nil {
+			return fmt.Errorf("failed to heal branch credentials Secret: %w", err)
+		}
+		log.Info("Branch credentials Secret healed", "name", currentSecret.Name)
 	}
 
 	return nil
