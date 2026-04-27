@@ -70,7 +70,6 @@ var _ = Describe("Manager", Ordered, func() {
 			"make",
 			"deploy",
 			fmt.Sprintf("IMG_OPERATOR=%s", projectImage),
-			fmt.Sprintf("IMG_CONTROLPLANE=%s", controlplaneImage),
 		)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
