@@ -38,7 +38,8 @@ import (
 // ProjectReconciler reconciles a Project object
 type ProjectReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme                   *runtime.Scheme
+	StorageControllerBaseURL string
 }
 
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=projects,verbs=get;list;watch;create;update;patch;delete
@@ -155,13 +156,13 @@ func (r *ProjectReconciler) updateTenantID(ctx context.Context, project *neonv1a
 func (r *ProjectReconciler) ensureTenantOnPageserver(ctx context.Context, project *neonv1alpha1.Project) error {
 	log := logf.FromContext(ctx)
 
-	storageControllerURL := fmt.Sprintf(
-		"http://%s-storage-controller:8080/v1/tenant/%s/location_config",
-		project.Spec.ClusterName,
-		project.Spec.TenantID,
-	)
+	base := r.StorageControllerBaseURL
+	if base == "" {
+		base = fmt.Sprintf("http://%s-storage-controller:8080", project.Spec.ClusterName)
+	}
+	storageControllerURL := fmt.Sprintf("%s/v1/tenant/%s/location_config", base, project.Spec.TenantID)
 
-	log.Info("Sending request to pageserver", "url", storageControllerURL)
+	log.Info("Sending request to storage controller", "url", storageControllerURL)
 
 	requestBody := []byte(`{"mode": "AttachedSingle", "generation": 1, "tenant_conf": {}}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, storageControllerURL, bytes.NewBuffer(requestBody))
@@ -173,7 +174,7 @@ func (r *ProjectReconciler) ensureTenantOnPageserver(ctx context.Context, projec
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Info("Failed to connect to pageserver, will retry", "error", err, "url", storageControllerURL)
+		log.Info("Failed to connect to storage controller, will retry", "error", err, "url", storageControllerURL)
 		if setErr := utils.SetPhases(ctx, r.Client, project, func(p *neonv1alpha1.Project) {
 			utils.SetProjectPageserverConnectionErrorStatus(p, fmt.Sprintf("Failed to connect to pageserver: %v", err))
 		}); setErr != nil {
@@ -188,7 +189,7 @@ func (r *ProjectReconciler) ensureTenantOnPageserver(ctx context.Context, projec
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Info("Pageserver returned error status", "status", resp.Status)
+		log.Info("Storage controller returned error status", "status", resp.Status)
 		if setErr := utils.SetPhases(ctx, r.Client, project, func(p *neonv1alpha1.Project) {
 			utils.SetProjectTenantCreationFailedStatus(p, fmt.Sprintf("Pageserver returned status: %s", resp.Status))
 		}); setErr != nil {
@@ -197,7 +198,7 @@ func (r *ProjectReconciler) ensureTenantOnPageserver(ctx context.Context, projec
 		return fmt.Errorf("pageserver returned status: %s", resp.Status)
 	}
 
-	log.Info("Successfully created tenant on pageserver")
+	log.Info("Successfully created tenant on storage controller")
 	return nil
 }
 
