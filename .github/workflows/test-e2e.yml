@@ -2,12 +2,24 @@ name: E2E Tests
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-e2e:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Clone the code
         uses: actions/checkout@v4
