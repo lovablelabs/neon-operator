@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -39,6 +40,7 @@ import (
 
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
 	"oltp.molnett.org/neon-operator/internal/controller"
+	"oltp.molnett.org/neon-operator/internal/controlplane"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -61,12 +63,15 @@ func main() {
 	var webhookCertPath, webhookCertName, webhookCertKey string
 	var enableLeaderElection bool
 	var probeAddr string
+	var controlplaneAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&controlplaneAddr, "controlplane-bind-address", ":8082",
+		"The address the controlplane HTTP endpoints (notify-attach, compute spec) bind to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -261,6 +266,15 @@ func main() {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+
+	if err := mgr.Add(&controlplane.ControlPlane{
+		Log:      slog.New(slog.NewJSONHandler(os.Stdout, nil)),
+		Client:   mgr.GetClient(),
+		BindAddr: controlplaneAddr,
+	}); err != nil {
+		setupLog.Error(err, "unable to add controlplane runnable")
 		os.Exit(1)
 	}
 

@@ -1,4 +1,5 @@
 /target
 crates/e2e_tests/e2e_tests.log
 .claude/agents
+.claude/settings.local.json
 bin/
