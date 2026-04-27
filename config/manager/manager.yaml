@@ -63,9 +63,13 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            - --controlplane-bind-address=:8082
           image: controller
           name: manager
-          ports: []
+          ports:
+            - containerPort: 8082
+              name: controlplane
+              protocol: TCP
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -98,77 +102,9 @@ spec:
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10
 ---
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: controller-controlplane
-  namespace: system
-  labels:
-    control-plane: controller-controlplane
-    app.kubernetes.io/name: neon-operator-go
-    app.kubernetes.io/managed-by: kustomize
-spec:
-  selector:
-    matchLabels:
-      control-plane: controller-controlplane
-      app.kubernetes.io/name: neon-operator-go
-  replicas: 1
-  template:
-    metadata:
-      annotations:
-        kubectl.kubernetes.io/default-container: controlplane
-      labels:
-        control-plane: controller-controlplane
-        app.kubernetes.io/name: neon-operator-go
-        app.kubernetes.io/instance: controlplane
-    spec:
-      securityContext:
-        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
-        # This ensures that deployments meet the highest security requirements for Kubernetes.
-        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - command:
-            - /controlplane
-          image: controlplane
-          name: controlplane
-          ports: []
-          securityContext:
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - "ALL"
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8081
-            initialDelaySeconds: 15
-            periodSeconds: 20
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8081
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          # TODO(user): Configure the resources accordingly based on the project requirements.
-          # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
-          resources:
-            limits:
-              cpu: 500m
-              memory: 128Mi
-            requests:
-              cpu: 10m
-              memory: 64Mi
-          volumeMounts: []
-      volumes: []
-      serviceAccountName: controller-manager
-      terminationGracePeriodSeconds: 10
----
-# Service for Controlplane
-
+# Service fronting the controlplane HTTP endpoints (notify-attach, compute spec)
+# served by the manager pod on port 8082. Kept on external port 8081 so existing
+# storage_controller and compute_ctl callers don't have to change URLs.
 apiVersion: v1
 kind: Service
 metadata:
@@ -176,10 +112,10 @@ metadata:
   namespace: system
 spec:
   selector:
+    control-plane: controller-manager
     app.kubernetes.io/name: neon-operator-go
-    app.kubernetes.io/instance: controlplane
   ports:
     - name: http
       port: 8081
-      targetPort: 8081
+      targetPort: controlplane
   type: ClusterIP
