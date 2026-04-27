@@ -41,7 +41,8 @@ import (
 // BranchReconciler reconciles a Branch object
 type BranchReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme                   *runtime.Scheme
+	StorageControllerBaseURL string
 }
 
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=branches,verbs=get;list;watch;create;update;patch;delete
@@ -198,13 +199,13 @@ func (r *BranchReconciler) getCluster(ctx context.Context, clusterName, namespac
 func (r *BranchReconciler) ensureTimeline(ctx context.Context, branch *neonv1alpha1.Branch, project *neonv1alpha1.Project) error {
 	log := logf.FromContext(ctx)
 
-	pageserverURL := fmt.Sprintf(
-		"http://%s-storage-controller:8080/v1/tenant/%s/timeline",
-		project.Spec.ClusterName,
-		project.Spec.TenantID,
-	)
+	base := r.StorageControllerBaseURL
+	if base == "" {
+		base = fmt.Sprintf("http://%s-storage-controller:8080", project.Spec.ClusterName)
+	}
+	storageControllerURL := fmt.Sprintf("%s/v1/tenant/%s/timeline", base, project.Spec.TenantID)
 
-	log.Info("Sending request to pageserver", "url", pageserverURL)
+	log.Info("Sending request to storage controller", "url", storageControllerURL)
 
 	requestBody := map[string]interface{}{
 		"new_timeline_id": branch.Spec.TimelineID,
@@ -220,10 +221,10 @@ func (r *BranchReconciler) ensureTimeline(ctx context.Context, branch *neonv1alp
 		Timeout: 10 * time.Second,
 	}
 
-	resp, err := httpClient.Post(pageserverURL, "application/json", bytes.NewBuffer(bodyBytes))
+	resp, err := httpClient.Post(storageControllerURL, "application/json", bytes.NewBuffer(bodyBytes))
 	if err != nil {
-		log.Info("Failed to connect to pageserver, will retry", "url", pageserverURL, "error", err)
-		return fmt.Errorf("failed to connect to pageserver: %w", err)
+		log.Info("Failed to connect to storage controller, will retry", "url", storageControllerURL, "error", err)
+		return fmt.Errorf("failed to connect to storage controller: %w", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -232,11 +233,11 @@ func (r *BranchReconciler) ensureTimeline(ctx context.Context, branch *neonv1alp
 	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
-		log.Info("Failed to create timeline on pageserver", "status", resp.StatusCode)
-		return fmt.Errorf("failed to create timeline on pageserver, status: %d", resp.StatusCode)
+		log.Info("Failed to create timeline on storage controller", "status", resp.StatusCode)
+		return fmt.Errorf("failed to create timeline on storage controller, status: %d", resp.StatusCode)
 	}
 
-	log.Info("Successfully created timeline on pageserver")
+	log.Info("Successfully created timeline on storage controller")
 	return nil
 }
 
