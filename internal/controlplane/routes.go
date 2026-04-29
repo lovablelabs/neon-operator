@@ -15,11 +15,12 @@ func addRoutes(
 	mux *http.ServeMux,
 	log *slog.Logger,
 	k8sClient client.Client,
+	computeBaseURL string,
 ) {
 	mux.Handle("/compute/api/v2/computes/{compute_id}/spec", logRequests(log, handleComputeSpec(log, k8sClient)))
 	mux.Handle("/healthz", logRequests(log, handleHealthCheck()))
 	mux.Handle("/readyz", logRequests(log, handleHealthCheck()))
-	mux.Handle("/notify-attach", logRequests(log, notifyAttach(log, k8sClient)))
+	mux.Handle("/notify-attach", logRequests(log, notifyAttach(log, k8sClient, computeBaseURL)))
 }
 
 type responseWriter struct {
@@ -77,7 +78,7 @@ func handleComputeSpec(log *slog.Logger, k8sClient client.Client) http.Handler {
 	})
 }
 
-func notifyAttach(log *slog.Logger, k8sClient client.Client) http.Handler {
+func notifyAttach(log *slog.Logger, k8sClient client.Client, computeBaseURL string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := r.Body.Close(); err != nil {
@@ -119,7 +120,7 @@ func notifyAttach(log *slog.Logger, k8sClient client.Client) http.Handler {
 
 		// Generate compute spec using the deployment
 		for _, deployment := range deployments.Items {
-			if err := compute.RefreshConfiguration(ctx, log, k8sClient, actualRequest, &deployment); err != nil {
+			if err := compute.RefreshConfiguration(ctx, log, k8sClient, actualRequest, &deployment, computeBaseURL); err != nil {
 				log.Error("Failed to refresh the configuration", "deployment", deployment.Name, "error", err)
 				failcount = failcount + 1
 			} else {

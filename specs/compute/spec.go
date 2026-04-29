@@ -140,7 +140,8 @@ func RefreshConfiguration(ctx context.Context,
 	log *slog.Logger,
 	k8sClient client.Client,
 	request ComputeHookNotifyRequest,
-	deployment *appsv1.Deployment) error {
+	deployment *appsv1.Deployment,
+	computeBaseURL string) error {
 	var computeId string
 	var exists bool
 
@@ -212,6 +213,9 @@ func RefreshConfiguration(ctx context.Context,
 		expectedServiceName := computeId + "-admin"
 		if expectedServiceName == serviceName {
 			url := fmt.Sprintf("http://%s-admin.%s:3080/configure", computeId, serviceNamespace)
+			if computeBaseURL != "" {
+				url = computeBaseURL + "/configure"
+			}
 			log.Info("Calling /configure endpoint at URL: ", "URL is", url)
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBuffer(specBytes))
 			if err != nil {

@@ -17,9 +17,10 @@ const shutdownTimeout = 10 * time.Second
 // ControlPlane is a controller-runtime manager.Runnable that serves the
 // HTTP control-plane endpoints (notify-attach, compute spec, health).
 type ControlPlane struct {
-	Log      *slog.Logger
-	Client   client.Client
-	BindAddr string
+	Log            *slog.Logger
+	Client         client.Client
+	BindAddr       string
+	ComputeBaseURL string
 }
 
 // Start implements manager.Runnable. The manager invokes it after caches sync
@@ -35,7 +36,7 @@ func (cp *ControlPlane) Start(ctx context.Context) error {
 		return fmt.Errorf("controlplane: BindAddr is required")
 	}
 
-	srv := newServer(cp.Log, cp.Client)
+	srv := newServer(cp.Log, cp.Client, cp.ComputeBaseURL)
 	httpServer := &http.Server{
 		Addr:              cp.BindAddr,
 		Handler:           srv,
@@ -60,10 +61,10 @@ func (cp *ControlPlane) Start(ctx context.Context) error {
 	}
 }
 
-func newServer(log *slog.Logger, k8sClient client.Client) http.Handler {
+func newServer(log *slog.Logger, k8sClient client.Client, computeBaseURL string) http.Handler {
 	mux := http.NewServeMux()
 
-	addRoutes(mux, log, k8sClient)
+	addRoutes(mux, log, k8sClient, computeBaseURL)
 
 	return mux
 }
