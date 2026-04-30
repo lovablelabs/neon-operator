@@ -244,7 +244,7 @@ func TestNotifyAttachHandler(t *testing.T) {
 
 			// Create handler
 			mux := http.NewServeMux()
-			mux.Handle("/notify-attach", notifyAttach(logger, k8sClient))
+			mux.Handle("/notify-attach", notifyAttach(logger, k8sClient, ""))
 
 			// Create test request
 			req := httptest.NewRequest(tt.requestMethod, "/notify-attach", bytes.NewBufferString(tt.requestBody))

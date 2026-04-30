@@ -6,11 +6,16 @@ import (
 	"oltp.molnett.org/neon-operator/test/fixtures"
 )
 
-func TestNewCluster(t *testing.T) {
-	c := fixtures.NewCluster("alpha", "neon")
+const (
+	testClusterName = "alpha"
+	testNamespace   = "neon"
+)
 
-	if c.Name != "alpha" || c.Namespace != "neon" {
-		t.Fatalf("ObjectMeta = %s/%s, want alpha/neon", c.Namespace, c.Name)
+func TestNewCluster(t *testing.T) {
+	c := fixtures.NewCluster(testClusterName, testNamespace)
+
+	if c.Name != testClusterName || c.Namespace != testNamespace {
+		t.Fatalf("ObjectMeta = %s/%s, want %s/%s", c.Namespace, c.Name, testNamespace, testClusterName)
 	}
 	if c.Spec.NumSafekeepers != 3 {
 		t.Errorf("NumSafekeepers = %d, want 3", c.Spec.NumSafekeepers)
@@ -18,8 +23,8 @@ func TestNewCluster(t *testing.T) {
 	if c.Spec.DefaultPGVersion != 17 {
 		t.Errorf("DefaultPGVersion = %d, want 17", c.Spec.DefaultPGVersion)
 	}
-	if c.Spec.BucketCredentialsSecret == nil || c.Spec.BucketCredentialsSecret.Name != "alpha-bucket-creds" {
-		t.Errorf("BucketCredentialsSecret = %+v, want name=alpha-bucket-creds", c.Spec.BucketCredentialsSecret)
+	if c.Spec.BucketCredentialsSecret == nil || c.Spec.BucketCredentialsSecret.Name != testClusterName+"-bucket-creds" {
+		t.Errorf("BucketCredentialsSecret = %+v, want name=%s-bucket-creds", c.Spec.BucketCredentialsSecret, testClusterName)
 	}
 	if c.Spec.StorageControllerDatabaseSecret == nil || c.Spec.StorageControllerDatabaseSecret.Key != "uri" {
 		t.Errorf("StorageControllerDatabaseSecret = %+v, want key=uri", c.Spec.StorageControllerDatabaseSecret)
@@ -27,9 +32,9 @@ func TestNewCluster(t *testing.T) {
 }
 
 func TestNewProject_LinkedToCluster(t *testing.T) {
-	p := fixtures.NewProject("p1", "neon", "alpha")
-	if p.Spec.ClusterName != "alpha" {
-		t.Errorf("ClusterName = %s, want alpha", p.Spec.ClusterName)
+	p := fixtures.NewProject("p1", testNamespace, testClusterName)
+	if p.Spec.ClusterName != testClusterName {
+		t.Errorf("ClusterName = %s, want %s", p.Spec.ClusterName, testClusterName)
 	}
 	if p.Spec.PGVersion != 17 {
 		t.Errorf("PGVersion = %d, want 17", p.Spec.PGVersion)
@@ -37,7 +42,7 @@ func TestNewProject_LinkedToCluster(t *testing.T) {
 }
 
 func TestNewBranch_LinkedToProject(t *testing.T) {
-	b := fixtures.NewBranch("b1", "neon", "p1")
+	b := fixtures.NewBranch("b1", testNamespace, "p1")
 	if b.Spec.ProjectID != "p1" {
 		t.Errorf("ProjectID = %s, want p1", b.Spec.ProjectID)
 	}
@@ -47,15 +52,15 @@ func TestNewBranch_LinkedToProject(t *testing.T) {
 }
 
 func TestNewPageserver_LinkedToCluster(t *testing.T) {
-	ps := fixtures.NewPageserver("ps0", "neon", "alpha", 1)
-	if ps.Spec.Cluster != "alpha" {
-		t.Errorf("Cluster = %s, want alpha", ps.Spec.Cluster)
+	ps := fixtures.NewPageserver("ps0", testNamespace, testClusterName, 1)
+	if ps.Spec.Cluster != testClusterName {
+		t.Errorf("Cluster = %s, want %s", ps.Spec.Cluster, testClusterName)
 	}
 	if ps.Spec.ID != 1 {
 		t.Errorf("ID = %d, want 1", ps.Spec.ID)
 	}
-	if ps.Spec.BucketCredentialsSecret == nil || ps.Spec.BucketCredentialsSecret.Name != "alpha-bucket-creds" {
-		t.Errorf("BucketCredentialsSecret = %+v, want name=alpha-bucket-creds", ps.Spec.BucketCredentialsSecret)
+	if ps.Spec.BucketCredentialsSecret == nil || ps.Spec.BucketCredentialsSecret.Name != testClusterName+"-bucket-creds" {
+		t.Errorf("BucketCredentialsSecret = %+v, want name=%s-bucket-creds", ps.Spec.BucketCredentialsSecret, testClusterName)
 	}
 	if ps.Spec.StorageConfig.Size != "1Gi" {
 		t.Errorf("StorageConfig.Size = %s, want 1Gi", ps.Spec.StorageConfig.Size)
@@ -63,9 +68,9 @@ func TestNewPageserver_LinkedToCluster(t *testing.T) {
 }
 
 func TestNewSafekeeper_LinkedToCluster(t *testing.T) {
-	sk := fixtures.NewSafekeeper("sk0", "neon", "alpha", 1)
-	if sk.Spec.Cluster != "alpha" {
-		t.Errorf("Cluster = %s, want alpha", sk.Spec.Cluster)
+	sk := fixtures.NewSafekeeper("sk0", testNamespace, testClusterName, 1)
+	if sk.Spec.Cluster != testClusterName {
+		t.Errorf("Cluster = %s, want %s", sk.Spec.Cluster, testClusterName)
 	}
 	if sk.Spec.ID != 1 {
 		t.Errorf("ID = %d, want 1", sk.Spec.ID)
@@ -79,9 +84,9 @@ func TestNewSafekeeper_LinkedToCluster(t *testing.T) {
 // what the Cluster fixture references. If these drift apart, every test that
 // composes a Cluster with its Secrets will fail confusingly.
 func TestSecretNamesMatchClusterReferences(t *testing.T) {
-	c := fixtures.NewCluster("alpha", "neon")
-	bucket := fixtures.NewBucketCredsSecret("alpha", "neon")
-	storconDB := fixtures.NewStorcondDBSecret("alpha", "neon")
+	c := fixtures.NewCluster(testClusterName, testNamespace)
+	bucket := fixtures.NewBucketCredsSecret(testClusterName, testNamespace)
+	storconDB := fixtures.NewStorcondDBSecret(testClusterName, testNamespace)
 
 	if bucket.Name != c.Spec.BucketCredentialsSecret.Name {
 		t.Errorf("bucket secret name %s != cluster ref %s", bucket.Name, c.Spec.BucketCredentialsSecret.Name)
