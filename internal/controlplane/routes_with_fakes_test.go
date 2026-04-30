@@ -17,7 +17,6 @@ import (
 func TestNotifyAttach_HappyPathWithFakes(t *testing.T) {
 	const (
 		clusterName = "test-cluster"
-		tenantID    = "test-tenant-123"
 		computeID   = "test-compute"
 	)
 
@@ -36,7 +35,7 @@ func TestNotifyAttach_HappyPathWithFakes(t *testing.T) {
 	scheme := createTestScheme()
 	objs := []client.Object{
 		createTestDeployment("123456789"),
-		createTestService(computeID+"-admin", "neon", tenantID),
+		createTestService(),
 		createTestProject(),
 		createTestBranch(),
 		jwtSecret,
