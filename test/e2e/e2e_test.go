@@ -28,6 +28,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/types"
 
 	"oltp.molnett.org/neon-operator/test/utils"
 )
@@ -85,6 +86,12 @@ var _ = Describe("Manager", Ordered, func() {
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
+		By("cleaning lifecycle fixtures before undeploy")
+		ctx := context.Background()
+		cli := e2eClient()
+		cleanupLifecycleFixtures(ctx, cli, namespace)
+		assertLifecycleFixturesDeleted(ctx, cli, namespace)
+
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found", "--wait=false")
 		_, _ = utils.Run(cmd)
@@ -144,6 +151,44 @@ var _ = Describe("Manager", Ordered, func() {
 			} else {
 				fmt.Println("Failed to describe controller pod")
 			}
+
+			By("Fetching lifecycle custom resources")
+			cmd = exec.Command("kubectl", "get", "cluster,project,branch,pageserver,safekeeper", "-n", namespace, "-o", "wide")
+			resourcesOutput, err := utils.Run(cmd)
+			if err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Lifecycle resources:\n%s", resourcesOutput)
+			} else {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get lifecycle resources: %s", err)
+			}
+
+			By("Fetching pageserver logs")
+			cmd = exec.Command("kubectl", "logs", "cluster-e2e-pageserver-0", "-n", namespace, "--tail=200")
+			pageserverLogs, err := utils.Run(cmd)
+			if err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Pageserver logs:\n%s", pageserverLogs)
+			} else {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get pageserver logs: %s", err)
+			}
+
+			By("Fetching safekeeper logs")
+			for _, name := range []string{"cluster-e2e-safekeeper-0", "cluster-e2e-safekeeper-1", "cluster-e2e-safekeeper-2"} {
+				cmd = exec.Command("kubectl", "logs", name, "-n", namespace, "--tail=100")
+				safekeeperLogs, safekeeperErr := utils.Run(cmd)
+				if safekeeperErr == nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "Safekeeper logs (%s):\n%s", name, safekeeperLogs)
+				} else {
+					_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get safekeeper logs for %s: %s", name, safekeeperErr)
+				}
+			}
+
+			By("Fetching storage-controller logs")
+			cmd = exec.Command("kubectl", "logs", "deploy/cluster-e2e-storage-controller", "-n", namespace, "--tail=200")
+			storageControllerLogs, err := utils.Run(cmd)
+			if err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Storage-controller logs:\n%s", storageControllerLogs)
+			} else {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get storage-controller logs: %s", err)
+			}
 		}
 	})
 
@@ -185,12 +230,22 @@ var _ = Describe("Manager", Ordered, func() {
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=neon-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: %s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: neon-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: %s
+  namespace: %s
+`, metricsRoleBindingName, serviceAccountName, namespace))
 			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply ClusterRoleBinding")
 
 			By("validating that the metrics service is available")
 			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
@@ -280,6 +335,71 @@ var _ = Describe("Manager", Ordered, func() {
 		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
 		//    strings.ToLower(<Kind>),
 		// ))
+	})
+
+	Context("Neon Lifecycle", func() {
+		It("reconciles cluster, project, and branch to Ready", func() {
+			ctx := context.Background()
+			cli := e2eClient()
+
+			By("creating required lifecycle secrets")
+			createLifecycleSecrets(ctx, cli, namespace)
+
+			By("creating minio fixture for pageserver remote storage")
+			createMinIOFixture(ctx, cli, namespace)
+
+			By("waiting for minio readiness")
+			waitForMinIOReady(ctx, cli, namespace)
+
+			By("ensuring remote storage bucket exists")
+			ensureMinIOBucket(namespace)
+
+			By("creating storage database fixture for storage-controller")
+			createStorageDatabaseFixture(ctx, cli, namespace)
+
+			By("waiting for storage database readiness")
+			waitForStorageDatabaseReady(ctx, cli, namespace)
+
+			DeferCleanup(func() {
+				cleanupLifecycleFixtures(ctx, cli, namespace)
+				assertLifecycleFixturesDeleted(ctx, cli, namespace)
+			})
+
+			By("creating Cluster via typed Go API object")
+			createLifecycleCluster(ctx, cli, namespace)
+
+			By("waiting for Cluster Ready=True")
+			waitForClusterReady(ctx, cli, types.NamespacedName{Name: lifecycleClusterName, Namespace: namespace})
+
+			By("waiting for storage-controller deployment availability")
+			waitForStorageControllerReady(ctx, cli, namespace, lifecycleClusterName)
+
+			By("creating pageserver and safekeeper resources")
+			createDataPlaneFixtures(ctx, cli, namespace)
+
+			By("waiting for pageserver readiness")
+			waitForPageserverReady(ctx, cli, types.NamespacedName{Name: lifecyclePageserverName, Namespace: namespace})
+
+			By("waiting for safekeeper readiness")
+			waitForSafekeeperReady(ctx, cli, types.NamespacedName{Name: "safekeeper-e2e-0", Namespace: namespace})
+			waitForSafekeeperReady(ctx, cli, types.NamespacedName{Name: "safekeeper-e2e-1", Namespace: namespace})
+			waitForSafekeeperReady(ctx, cli, types.NamespacedName{Name: "safekeeper-e2e-2", Namespace: namespace})
+
+			By("creating Project via typed Go API object")
+			createLifecycleProject(ctx, cli, namespace)
+
+			By("waiting for Project Ready=True")
+			waitForProjectReady(ctx, cli, types.NamespacedName{Name: lifecycleProjectName, Namespace: namespace})
+
+			By("creating Branch via typed Go API object")
+			createLifecycleBranch(ctx, cli, namespace)
+
+			By("waiting for Branch Ready=True")
+			waitForBranchReady(ctx, cli, types.NamespacedName{Name: lifecycleBranchName, Namespace: namespace})
+
+			By("waiting for branch compute pod readiness")
+			waitForComputePodReady(ctx, cli, namespace, lifecycleBranchName)
+		})
 	})
 })
 
