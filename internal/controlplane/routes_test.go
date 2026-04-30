@@ -77,13 +77,13 @@ func createTestBranch() *neonv1alpha1.Branch {
 	}
 }
 
-func createTestService(name, namespace, tenantID string) *corev1.Service {
+func createTestService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
+			Name:      "test-compute-admin",
+			Namespace: "neon",
 			Labels: map[string]string{
-				"neon.tenant_id": tenantID,
+				"neon.tenant_id": "test-tenant-123",
 			},
 		},
 	}
@@ -134,7 +134,7 @@ func TestNotifyAttachHandler(t *testing.T) {
 				createTestBranch(),
 			},
 			services: []*corev1.Service{
-				createTestService("test-compute-admin", "neon", "test-tenant-123"),
+				createTestService(),
 			},
 			secrets: []*corev1.Secret{
 				createTestSecret(),
@@ -176,7 +176,7 @@ func TestNotifyAttachHandler(t *testing.T) {
 				createTestBranch(),
 			},
 			services: []*corev1.Service{
-				createTestService("test-compute-admin", "neon", "test-tenant-123"),
+				createTestService(),
 			},
 			secrets: []*corev1.Secret{
 				createTestSecret(),
@@ -198,7 +198,7 @@ func TestNotifyAttachHandler(t *testing.T) {
 				createTestBranch(),
 			},
 			services: []*corev1.Service{
-				createTestService("test-compute-admin", "neon", "test-tenant-123"),
+				createTestService(),
 			},
 			secrets: []*corev1.Secret{
 				createTestSecret(),
