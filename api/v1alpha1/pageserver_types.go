@@ -39,41 +39,20 @@ type PageserverSpec struct {
 
 // PageserverStatus defines the observed state of Pageserver.
 type PageserverStatus struct {
-	Conditions []metav1.Condition `json:"conditions"`
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	Phase       string `json:"phase"`
-	PhaseReason string `json:"phaseReason,omitempty"`
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
-
-// GetConditions returns the conditions for the pageserver status
-func (b *PageserverStatus) GetConditions() []metav1.Condition {
-	return b.Conditions
-}
-
-// SetConditions sets the conditions for the pageserver status
-func (b *PageserverStatus) SetConditions(conditions []metav1.Condition) {
-	b.Conditions = conditions
-}
-
-// GetPhase returns the phase for the pageserver status
-func (b *PageserverStatus) GetPhase() string {
-	return b.Phase
-}
-
-// SetPhase sets the phase for the pageserver status
-func (b *PageserverStatus) SetPhase(phase string) {
-	b.Phase = phase
-}
-
-const (
-	PageserverPhaseCreating              = "Creating pageserver"
-	PageserverPhaseReady                 = "Ready"
-	PageserverPhaseInvalidSpec           = "Invalid spec"
-	PageserverPhaseCannotCreateResources = "Unable to create all necessary pageserver resources"
-)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Available",type=string,JSONPath=".status.conditions[?(@.type==\"Available\")].status"
+// +kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=".status.conditions[?(@.type==\"Progressing\")].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // Pageserver is the Schema for the pageservers API
 type Pageserver struct {

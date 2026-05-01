@@ -24,9 +24,6 @@ func Pod(pageserver *v1alpha1.Pageserver, image string) *corev1.Pod {
 				"molnett.org/component":  "pageserver",
 				"molnett.org/pageserver": pageserver.Name,
 			},
-			Finalizers: []string{
-				"pageserver.neon.io/finalizer",
-			},
 		},
 		Spec: corev1.PodSpec{
 			SecurityContext: &corev1.PodSecurityContext{

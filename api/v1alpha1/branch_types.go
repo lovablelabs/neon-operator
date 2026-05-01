@@ -38,20 +38,20 @@ type BranchSpec struct {
 
 // BranchStatus defines the observed state of Branch.
 type BranchStatus struct {
-	Conditions []metav1.Condition `json:"conditions,omitempty,omitzero"`
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	Phase string `json:"phase,omitempty"`
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
-
-const (
-	BranchPhaseCreating               = "Creating"
-	BranchPhaseReady                  = "Ready"
-	BranchPhaseCannotCreateResources  = "CannotCreateResources"
-	BranchPhaseTimelineCreationFailed = "TimelineCreationFailed"
-)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Available",type=string,JSONPath=".status.conditions[?(@.type==\"Available\")].status"
+// +kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=".status.conditions[?(@.type==\"Progressing\")].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // Branch is the Schema for the branches API
 type Branch struct {
@@ -77,26 +77,6 @@ type BranchList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Branch `json:"items"`
-}
-
-// GetConditions returns the conditions for the branch status
-func (b *BranchStatus) GetConditions() []metav1.Condition {
-	return b.Conditions
-}
-
-// SetConditions sets the conditions for the branch status
-func (b *BranchStatus) SetConditions(conditions []metav1.Condition) {
-	b.Conditions = conditions
-}
-
-// GetPhase returns the phase for the branch status
-func (b *BranchStatus) GetPhase() string {
-	return b.Phase
-}
-
-// SetPhase sets the phase for the branch status
-func (b *BranchStatus) SetPhase(phase string) {
-	b.Phase = phase
 }
 
 func init() {

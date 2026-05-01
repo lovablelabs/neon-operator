@@ -45,21 +45,20 @@ type SafekeeperSpec struct {
 
 // SafekeeperStatus defines the observed state of Safekeeper.
 type SafekeeperStatus struct {
-	Conditions []metav1.Condition `json:"conditions"`
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	Phase       string `json:"phase"`
-	PhaseReason string `json:"phaseReason,omitempty"`
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
-
-const (
-	SafekeeperPhaseCreating              = "Creating safekeeper"
-	SafekeeperPhaseReady                 = "Ready"
-	SafekeeperPhaseInvalidSpec           = "Invalid spec"
-	SafekeeperPhaseCannotCreateResources = "Unable to create all necessary safekeeper resources"
-)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Available",type=string,JSONPath=".status.conditions[?(@.type==\"Available\")].status"
+// +kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=".status.conditions[?(@.type==\"Progressing\")].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // Safekeeper is the Schema for the safekeepers API
 type Safekeeper struct {
@@ -76,26 +75,6 @@ type Safekeeper struct {
 	// status defines the observed state of Safekeeper
 	// +optional
 	Status SafekeeperStatus `json:"status,omitzero"`
-}
-
-// GetConditions returns the conditions for the safekeeper status
-func (b *SafekeeperStatus) GetConditions() []metav1.Condition {
-	return b.Conditions
-}
-
-// SetConditions sets the conditions for the safekeeper status
-func (b *SafekeeperStatus) SetConditions(conditions []metav1.Condition) {
-	b.Conditions = conditions
-}
-
-// GetPhase returns the phase for the safekeeper status
-func (b *SafekeeperStatus) GetPhase() string {
-	return b.Phase
-}
-
-// SetPhase sets the phase for the safekeeper status
-func (b *SafekeeperStatus) SetPhase(phase string) {
-	b.Phase = phase
 }
 
 // +kubebuilder:object:root=true

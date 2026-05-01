@@ -37,21 +37,20 @@ type ProjectSpec struct {
 
 // ProjectStatus defines the observed state of Project.
 type ProjectStatus struct {
-	Conditions []metav1.Condition `json:"conditions,omitempty,omitzero"`
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	Phase string `json:"phase,omitempty"`
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
-
-const (
-	ProjectPhasePending                   = "Pending"
-	ProjectPhaseCreating                  = "Creating"
-	ProjectPhaseReady                     = "Ready"
-	ProjectPhaseTenantCreationFailed      = "TenantCreationFailed"
-	ProjectPhasePageserverConnectionError = "PageserverConnectionError"
-)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Available",type=string,JSONPath=".status.conditions[?(@.type==\"Available\")].status"
+// +kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=".status.conditions[?(@.type==\"Progressing\")].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // Project is the Schema for the projects API
 type Project struct {
@@ -77,26 +76,6 @@ type ProjectList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Project `json:"items"`
-}
-
-// GetConditions returns the conditions for the project status
-func (p *ProjectStatus) GetConditions() []metav1.Condition {
-	return p.Conditions
-}
-
-// SetConditions sets the conditions for the project status
-func (p *ProjectStatus) SetConditions(conditions []metav1.Condition) {
-	p.Conditions = conditions
-}
-
-// GetPhase returns the phase for the project status
-func (p *ProjectStatus) GetPhase() string {
-	return p.Phase
-}
-
-// SetPhase sets the phase for the project status
-func (p *ProjectStatus) SetPhase(phase string) {
-	p.Phase = phase
 }
 
 func init() {

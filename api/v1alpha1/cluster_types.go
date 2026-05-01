@@ -46,32 +46,20 @@ type ClusterSpec struct {
 
 // ClusterStatus defines the observed state of Cluster.
 type ClusterStatus struct {
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// +optional
+	// +listType=map
+	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// +optional
-	StorageBrokerStatus StorageBrokerStatus `json:"storageBrokerStatus,omitzero"`
-
-	// +optional
-	Phase string `json:"phase,omitempty"`
-
-	// +optional
-	PhaseReason string `json:"phaseReason,omitempty"`
-}
-
-const (
-	ClusterPhaseCreating                     = "Creating cluster"
-	ClusterPhaseReady                        = "Ready"
-	ClusterPhaseCannotCreateClusterResources = "Unable to create all necessary cluster resources"
-)
-
-// Represents the current state of the storage broker.
-type StorageBrokerStatus struct {
-	// Total number of ready Storage Brokers instances in the cluster.
-	ReadyInstances int32 `json:"readyInstances"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Available",type=string,JSONPath=".status.conditions[?(@.type==\"Available\")].status"
+// +kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=".status.conditions[?(@.type==\"Progressing\")].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // Cluster is the Schema for the clusters API
 type Cluster struct {
@@ -97,26 +85,6 @@ type ClusterList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []Cluster `json:"items"`
-}
-
-// GetConditions returns the conditions for the cluster status
-func (c *ClusterStatus) GetConditions() []metav1.Condition {
-	return c.Conditions
-}
-
-// SetConditions sets the conditions for the cluster status
-func (c *ClusterStatus) SetConditions(conditions []metav1.Condition) {
-	c.Conditions = conditions
-}
-
-// GetPhase returns the phase for the cluster status
-func (c *ClusterStatus) GetPhase() string {
-	return c.Phase
-}
-
-// SetPhase sets the phase for the cluster status
-func (c *ClusterStatus) SetPhase(phase string) {
-	c.Phase = phase
 }
 
 func init() {

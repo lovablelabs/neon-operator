@@ -24,7 +24,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -86,30 +88,65 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *ClusterReconciler) reconcile(ctx context.Context, cluster *neonv1alpha1.Cluster) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if cluster.Status.Phase == "" {
-		if err := utils.SetPhases(ctx, r.Client, cluster, utils.SetClusterCreatingStatus); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error setting default Status: %w", err)
-		}
-		log.Info("Cluster phase set to creating")
+	createErr := r.createClusterResources(ctx, cluster)
+	if createErr != nil {
+		log.Error(createErr, "error while creating cluster resources")
 	}
 
-	err := r.createClusterResources(ctx, cluster)
-	if err != nil {
-		log.Error(err, "error while creating cluster resources")
-		if setErr := utils.SetPhases(ctx, r.Client, cluster, utils.SetClusterCannotCreateResourcesStatus); setErr != nil {
-			log.Error(setErr, "failed to set cluster status")
-		}
-		return ctrl.Result{}, fmt.Errorf("not able to create cluster resources: %w", err)
+	if err := r.updateStatus(ctx, cluster, createErr); err != nil {
+		log.Error(err, "failed to update cluster status")
+		return ctrl.Result{}, err
 	}
 
-	// Set cluster to ready status after successful resource creation
-	if err := utils.SetPhases(ctx, r.Client, cluster, utils.SetClusterReadyStatus); err != nil {
-		log.Error(err, "failed to set cluster ready status")
-		return ctrl.Result{}, fmt.Errorf("failed to update cluster status to ready: %w", err)
+	if createErr != nil {
+		return ctrl.Result{}, fmt.Errorf("not able to create cluster resources: %w", createErr)
 	}
-	log.Info("Cluster status set to ready")
-
 	return ctrl.Result{}, nil
+}
+
+func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *neonv1alpha1.Cluster, reconcileErr error) error {
+	scAvailable, scReason, scMessage := r.deploymentState(ctx, cluster, fmt.Sprintf("%s-storage-controller", cluster.Name), "Storage controller")
+	sbAvailable, sbReason, sbMessage := r.deploymentState(ctx, cluster, fmt.Sprintf("%s-storage-broker", cluster.Name), "Storage broker")
+
+	return utils.PatchStatus(ctx, r.Client, cluster, func(c *neonv1alpha1.Cluster) {
+		c.Status.ObservedGeneration = c.Generation
+		conds := &c.Status.Conditions
+
+		if reconcileErr != nil {
+			utils.SetCondition(c, conds, utils.ConditionAvailable, metav1.ConditionFalse, utils.ReasonResourceCreateFailed, reconcileErr.Error())
+			utils.SetCondition(c, conds, utils.ConditionProgressing, metav1.ConditionTrue, utils.ReasonReconciling, "Retrying after resource creation failure")
+			utils.SetCondition(c, conds, utils.ConditionStorageControllerAvailable, scAvailable, scReason, scMessage)
+			utils.SetCondition(c, conds, utils.ConditionStorageBrokerAvailable, sbAvailable, sbReason, sbMessage)
+			return
+		}
+
+		utils.SetCondition(c, conds, utils.ConditionStorageControllerAvailable, scAvailable, scReason, scMessage)
+		utils.SetCondition(c, conds, utils.ConditionStorageBrokerAvailable, sbAvailable, sbReason, sbMessage)
+
+		switch {
+		case scAvailable == metav1.ConditionTrue && sbAvailable == metav1.ConditionTrue:
+			utils.SetCondition(c, conds, utils.ConditionAvailable, metav1.ConditionTrue, utils.ReasonAsExpected, "Cluster components are Available")
+			utils.SetCondition(c, conds, utils.ConditionProgressing, metav1.ConditionFalse, utils.ReasonAsExpected, "Cluster is at desired state")
+		default:
+			utils.SetCondition(c, conds, utils.ConditionAvailable, metav1.ConditionFalse, utils.ReasonChildDeploymentNotAvailable, "One or more cluster components are not Available")
+			utils.SetCondition(c, conds, utils.ConditionProgressing, metav1.ConditionTrue, utils.ReasonReconciling, "Waiting for child Deployments to become Available")
+		}
+	})
+}
+
+func (r *ClusterReconciler) deploymentState(ctx context.Context, cluster *neonv1alpha1.Cluster, name, label string) (metav1.ConditionStatus, string, string) {
+	dep := &appsv1.Deployment{}
+	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cluster.Namespace}, dep)
+	switch {
+	case apierrors.IsNotFound(err):
+		return metav1.ConditionFalse, utils.ReasonChildResourceMissing, fmt.Sprintf("%s Deployment has not been observed yet", label)
+	case err != nil:
+		return metav1.ConditionUnknown, utils.ReasonChildResourceMissing, err.Error()
+	case utils.IsDeploymentAvailable(dep):
+		return metav1.ConditionTrue, utils.ReasonAsExpected, fmt.Sprintf("%s Deployment is Available", label)
+	default:
+		return metav1.ConditionFalse, utils.ReasonChildDeploymentNotAvailable, fmt.Sprintf("%s Deployment is not yet Available", label)
+	}
 }
 
 func (r *ClusterReconciler) getCluster(ctx context.Context, req ctrl.Request) (*neonv1alpha1.Cluster, error) {

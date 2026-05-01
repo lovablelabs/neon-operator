@@ -14,7 +14,17 @@ spec:
     singular: cluster
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Available")].status
+      name: Available
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Progressing")].status
+      name: Progressing
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Cluster is the Schema for the clusters API
@@ -160,21 +170,12 @@ spec:
                   - type
                   type: object
                 type: array
-              phase:
-                type: string
-              phaseReason:
-                type: string
-              storageBrokerStatus:
-                description: Represents the current state of the storage broker.
-                properties:
-                  readyInstances:
-                    description: Total number of ready Storage Brokers instances in
-                      the cluster.
-                    format: int32
-                    type: integer
-                required:
-                - readyInstances
-                type: object
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                format: int64
+                type: integer
             type: object
         required:
         - metadata
