@@ -162,7 +162,7 @@ func (r *BranchReconciler) updateStatus(ctx context.Context, branch *neonv1alpha
 		}
 
 		computeReady := metav1.ConditionFalse
-		computeReason := utils.ReasonReconciling
+		computeReason := utils.ReasonChildDeploymentNotAvailable
 		computeMessage := "Compute Deployment is not Available yet"
 		switch {
 		case createErr != nil:
@@ -179,8 +179,6 @@ func (r *BranchReconciler) updateStatus(ctx context.Context, branch *neonv1alpha
 			computeReady = metav1.ConditionTrue
 			computeReason = utils.ReasonAsExpected
 			computeMessage = "Compute Deployment is Available"
-		default:
-			computeReason = utils.ReasonChildDeploymentNotAvailable
 		}
 		utils.SetCondition(b, conds, utils.ConditionComputeReady, computeReady, computeReason, computeMessage)
 

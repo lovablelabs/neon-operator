@@ -76,7 +76,13 @@ type PodBackedStatus interface {
 
 // SetCondition wraps meta.SetStatusCondition; it preserves LastTransitionTime
 // when only ObservedGeneration / Reason / Message change.
-func SetCondition(obj client.Object, conds *[]metav1.Condition, t string, status metav1.ConditionStatus, reason, message string) {
+func SetCondition(
+	obj client.Object,
+	conds *[]metav1.Condition,
+	t string,
+	status metav1.ConditionStatus,
+	reason, message string,
+) {
 	meta.SetStatusCondition(conds, metav1.Condition{
 		Type:               t,
 		Status:             status,
@@ -116,7 +122,13 @@ func PatchStatus[T StatusObject](ctx context.Context, c client.Client, obj T, mu
 // UpdatePodBackedStatus applies the standard pod-backed condition pattern:
 // ResourcesReady reflects reconcileErr; Available + Progressing roll up the
 // child Pod's Ready condition. Used by Pageserver and Safekeeper.
-func UpdatePodBackedStatus[T PodBackedStatus](ctx context.Context, c client.Client, obj T, podName, label string, reconcileErr error) error {
+func UpdatePodBackedStatus[T PodBackedStatus](
+	ctx context.Context,
+	c client.Client,
+	obj T,
+	podName, label string,
+	reconcileErr error,
+) error {
 	pod := &corev1.Pod{}
 	podErr := c.Get(ctx, types.NamespacedName{Name: podName, Namespace: obj.GetNamespace()}, pod)
 
@@ -125,24 +137,32 @@ func UpdatePodBackedStatus[T PodBackedStatus](ctx context.Context, c client.Clie
 		conds := o.StatusConditions()
 
 		if reconcileErr != nil {
-			SetCondition(o, conds, ConditionResourcesReady, metav1.ConditionFalse, ReasonResourceCreateFailed, reconcileErr.Error())
-			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, ReasonResourceCreateFailed, reconcileErr.Error())
-			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, "Retrying after resource creation failure")
+			msg := reconcileErr.Error()
+			SetCondition(o, conds, ConditionResourcesReady, metav1.ConditionFalse, ReasonResourceCreateFailed, msg)
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, ReasonResourceCreateFailed, msg)
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling,
+				"Retrying after resource creation failure")
 			return
 		}
 
-		SetCondition(o, conds, ConditionResourcesReady, metav1.ConditionTrue, ReasonAsExpected, "Child resources reconciled")
+		SetCondition(o, conds, ConditionResourcesReady, metav1.ConditionTrue, ReasonAsExpected,
+			"Child resources reconciled")
 
 		switch {
 		case apierrors.IsNotFound(podErr):
-			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, ReasonChildResourceMissing, fmt.Sprintf("%s Pod has not been observed yet", label))
-			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, "Waiting for child Pod to appear")
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, ReasonChildResourceMissing,
+				fmt.Sprintf("%s Pod has not been observed yet", label))
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling,
+				"Waiting for child Pod to appear")
 		case podErr != nil:
 			SetCondition(o, conds, ConditionAvailable, metav1.ConditionUnknown, ReasonChildResourceMissing, podErr.Error())
-			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, "Could not read child Pod")
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling,
+				"Could not read child Pod")
 		case IsPodReady(pod):
-			SetCondition(o, conds, ConditionAvailable, metav1.ConditionTrue, ReasonAsExpected, fmt.Sprintf("%s Pod is Ready", label))
-			SetCondition(o, conds, ConditionProgressing, metav1.ConditionFalse, ReasonAsExpected, fmt.Sprintf("%s is at desired state", label))
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionTrue, ReasonAsExpected,
+				fmt.Sprintf("%s Pod is Ready", label))
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionFalse, ReasonAsExpected,
+				fmt.Sprintf("%s is at desired state", label))
 		default:
 			reason, message := PodNotReadyDetail(pod)
 			if reason == "" {
@@ -150,7 +170,8 @@ func UpdatePodBackedStatus[T PodBackedStatus](ctx context.Context, c client.Clie
 				message = fmt.Sprintf("%s Pod is not Ready", label)
 			}
 			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, reason, message)
-			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, fmt.Sprintf("Waiting for %s Pod readiness", label))
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling,
+				fmt.Sprintf("Waiting for %s Pod readiness", label))
 		}
 	})
 }

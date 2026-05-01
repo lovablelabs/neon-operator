@@ -12,7 +12,8 @@ func TestSetCondition_AddsCondition(t *testing.T) {
 	cluster := &neonv1alpha1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{Generation: 3},
 	}
-	SetCondition(cluster, &cluster.Status.Conditions, ConditionAvailable, metav1.ConditionTrue, ReasonAsExpected, "Cluster is Available")
+	SetCondition(cluster, &cluster.Status.Conditions, ConditionAvailable, metav1.ConditionTrue,
+		ReasonAsExpected, "Cluster is Available")
 
 	if len(cluster.Status.Conditions) != 1 {
 		t.Fatalf("expected 1 condition, got %d", len(cluster.Status.Conditions))
