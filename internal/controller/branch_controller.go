@@ -28,6 +28,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -99,14 +100,6 @@ func (r *BranchReconciler) getBranch(ctx context.Context, req ctrl.Request) (*ne
 func (r *BranchReconciler) reconcile(ctx context.Context, branch *neonv1alpha1.Branch) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if branch.Status.Phase == "" {
-		if err := utils.SetPhases(ctx, r.Client, branch, utils.SetBranchCreatingStatus); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error setting default Status: %w", err)
-		}
-		log.Info("Branch phase set to creating")
-	}
-
-	// Generate timeline_id if not set
 	if branch.Spec.TimelineID == "" {
 		if err := r.updateTimelineID(ctx, branch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update timelineID: %w", err)
@@ -114,36 +107,89 @@ func (r *BranchReconciler) reconcile(ctx context.Context, branch *neonv1alpha1.B
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
-	// Get the project for this branch
 	project, err := r.getProject(ctx, branch.Spec.ProjectID, branch.Namespace)
 	if err != nil {
 		log.Error(err, "failed to get project", "projectID", branch.Spec.ProjectID)
 		return ctrl.Result{}, err
 	}
 
-	// Create timeline on storage controller
-	if err := r.ensureTimeline(ctx, branch, project); err != nil {
-		log.Error(err, "failed to ensure timeline")
+	timelineErr := r.ensureTimeline(ctx, branch, project)
+	if timelineErr != nil {
+		log.Error(timelineErr, "failed to ensure timeline")
+	}
+
+	var createErr error
+	if timelineErr == nil {
+		createErr = r.createBranchResources(ctx, branch, project)
+		if createErr != nil {
+			log.Error(createErr, "error while creating branch resources")
+		}
+	}
+
+	if statusErr := r.updateStatus(ctx, branch, timelineErr, createErr); statusErr != nil {
+		log.Error(statusErr, "failed to update branch status")
+		return ctrl.Result{}, statusErr
+	}
+
+	if timelineErr != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-
-	// Create branch resources
-	if err := r.createBranchResources(ctx, branch, project); err != nil {
-		log.Error(err, "error while creating branch resources")
-		if setErr := utils.SetPhases(ctx, r.Client, branch, utils.SetBranchCannotCreateResourcesStatus); setErr != nil {
-			log.Error(setErr, "failed to set branch status")
-		}
-		return ctrl.Result{}, fmt.Errorf("not able to create branch resources: %w", err)
+	if createErr != nil {
+		return ctrl.Result{}, fmt.Errorf("not able to create branch resources: %w", createErr)
 	}
-
-	// Set branch to ready status after successful resource creation
-	if err := utils.SetPhases(ctx, r.Client, branch, utils.SetBranchReadyStatus); err != nil {
-		log.Error(err, "failed to set branch ready status")
-		return ctrl.Result{}, fmt.Errorf("failed to update branch status to ready: %w", err)
-	}
-	log.Info("Branch status set to ready")
-
 	return ctrl.Result{}, nil
+}
+
+func (r *BranchReconciler) updateStatus(ctx context.Context, branch *neonv1alpha1.Branch, timelineErr, createErr error) error {
+	deploymentName := fmt.Sprintf("%s-compute-node", branch.Name)
+	dep := &appsv1.Deployment{}
+	depErr := r.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: branch.Namespace}, dep)
+
+	return utils.PatchStatus(ctx, r.Client, branch, func(b *neonv1alpha1.Branch) {
+		b.Status.ObservedGeneration = b.Generation
+		conds := &b.Status.Conditions
+
+		if b.Spec.TimelineID != "" {
+			utils.SetCondition(b, conds, utils.ConditionTimelineIDAssigned, metav1.ConditionTrue, utils.ReasonAsExpected, "Timeline ID is assigned")
+		} else {
+			utils.SetCondition(b, conds, utils.ConditionTimelineIDAssigned, metav1.ConditionFalse, utils.ReasonTimelineIDPending, "Timeline ID has not been generated yet")
+		}
+
+		if timelineErr != nil {
+			utils.SetCondition(b, conds, utils.ConditionTimelineCreated, metav1.ConditionFalse, utils.ReasonTimelineCreationFailed, timelineErr.Error())
+		} else {
+			utils.SetCondition(b, conds, utils.ConditionTimelineCreated, metav1.ConditionTrue, utils.ReasonAsExpected, "Timeline created on storage controller")
+		}
+
+		computeReady := metav1.ConditionFalse
+		computeReason := utils.ReasonChildDeploymentNotAvailable
+		computeMessage := "Compute Deployment is not Available yet"
+		switch {
+		case createErr != nil:
+			computeReason = utils.ReasonResourceCreateFailed
+			computeMessage = createErr.Error()
+		case apierrors.IsNotFound(depErr):
+			computeReason = utils.ReasonChildResourceMissing
+			computeMessage = "Compute Deployment has not been observed yet"
+		case depErr != nil:
+			computeReady = metav1.ConditionUnknown
+			computeReason = utils.ReasonChildResourceMissing
+			computeMessage = depErr.Error()
+		case utils.IsDeploymentAvailable(dep):
+			computeReady = metav1.ConditionTrue
+			computeReason = utils.ReasonAsExpected
+			computeMessage = "Compute Deployment is Available"
+		}
+		utils.SetCondition(b, conds, utils.ConditionComputeReady, computeReady, computeReason, computeMessage)
+
+		if timelineErr == nil && computeReady == metav1.ConditionTrue {
+			utils.SetCondition(b, conds, utils.ConditionAvailable, metav1.ConditionTrue, utils.ReasonAsExpected, "Branch is Available")
+			utils.SetCondition(b, conds, utils.ConditionProgressing, metav1.ConditionFalse, utils.ReasonAsExpected, "Branch is at desired state")
+		} else {
+			utils.SetCondition(b, conds, utils.ConditionAvailable, metav1.ConditionFalse, computeReason, computeMessage)
+			utils.SetCondition(b, conds, utils.ConditionProgressing, metav1.ConditionTrue, utils.ReasonReconciling, "Working toward desired state")
+		}
+	})
 }
 
 func (r *BranchReconciler) updateTimelineID(ctx context.Context, branch *neonv1alpha1.Branch) error {

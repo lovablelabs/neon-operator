@@ -89,29 +89,20 @@ func (r *SafekeeperReconciler) getSafekeeper(ctx context.Context, req ctrl.Reque
 func (r *SafekeeperReconciler) reconcile(ctx context.Context, safekeeper *neonv1alpha1.Safekeeper) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if safekeeper.Status.Phase == "" {
-		if err := utils.SetPhases(ctx, r.Client, safekeeper, utils.SetSafekeeperCreatingStatus); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error setting default Status: %w", err)
-		}
-		log.Info("Safekeeper phase set to creating")
+	createErr := r.createSafekeeperResources(ctx, safekeeper)
+	if createErr != nil {
+		log.Error(createErr, "error while creating safekeeper resources")
 	}
 
-	err := r.createSafekeeperResources(ctx, safekeeper)
-	if err != nil {
-		log.Error(err, "error while creating safekeeper resources")
-		if setErr := utils.SetPhases(ctx, r.Client, safekeeper, utils.SetSafekeeperCannotCreateResourcesStatus); setErr != nil {
-			log.Error(setErr, "failed to set safekeeper status")
-		}
-		return ctrl.Result{}, fmt.Errorf("not able to create safekeeper resources: %w", err)
+	podName := fmt.Sprintf("%s-safekeeper-%d", safekeeper.Spec.Cluster, safekeeper.Spec.ID)
+	if err := utils.UpdatePodBackedStatus(ctx, r.Client, safekeeper, podName, "Safekeeper", createErr); err != nil {
+		log.Error(err, "failed to update safekeeper status")
+		return ctrl.Result{}, err
 	}
 
-	// Set safekeeper to ready status after successful resource creation
-	if err := utils.SetPhases(ctx, r.Client, safekeeper, utils.SetSafekeeperReadyStatus); err != nil {
-		log.Error(err, "failed to set safekeeper ready status")
-		return ctrl.Result{}, fmt.Errorf("failed to update safekeeper status to ready: %w", err)
+	if createErr != nil {
+		return ctrl.Result{}, fmt.Errorf("not able to create safekeeper resources: %w", createErr)
 	}
-	log.Info("Safekeeper status set to ready")
-
 	return ctrl.Result{}, nil
 }
 

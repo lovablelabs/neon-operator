@@ -90,29 +90,20 @@ func (r *PageserverReconciler) getPageserver(ctx context.Context, req ctrl.Reque
 func (r *PageserverReconciler) reconcile(ctx context.Context, pageserver *neonv1alpha1.Pageserver) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if pageserver.Status.Phase == "" {
-		if err := utils.SetPhases(ctx, r.Client, pageserver, utils.SetPageserverCreatingStatus); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error setting default Status: %w", err)
-		}
-		log.Info("Pageserver phase set to creating")
+	createErr := r.createPageserverResources(ctx, pageserver)
+	if createErr != nil {
+		log.Error(createErr, "error while creating pageserver resources")
 	}
 
-	err := r.createPageserverResources(ctx, pageserver)
-	if err != nil {
-		log.Error(err, "error while creating pageserver resources")
-		if setErr := utils.SetPhases(ctx, r.Client, pageserver, utils.SetPageserverCannotCreateResourcesStatus); setErr != nil {
-			log.Error(setErr, "failed to set pageserver status")
-		}
-		return ctrl.Result{}, fmt.Errorf("not able to create pageserver resources: %w", err)
+	podName := fmt.Sprintf("%s-pageserver-%d", pageserver.Spec.Cluster, pageserver.Spec.ID)
+	if err := utils.UpdatePodBackedStatus(ctx, r.Client, pageserver, podName, "Pageserver", createErr); err != nil {
+		log.Error(err, "failed to update pageserver status")
+		return ctrl.Result{}, err
 	}
 
-	// Set pageserver to ready status after successful resource creation
-	if err := utils.SetPhases(ctx, r.Client, pageserver, utils.SetPageserverReadyStatus); err != nil {
-		log.Error(err, "failed to set pageserver ready status")
-		return ctrl.Result{}, fmt.Errorf("failed to update pageserver status to ready: %w", err)
+	if createErr != nil {
+		return ctrl.Result{}, fmt.Errorf("not able to create pageserver resources: %w", createErr)
 	}
-	log.Info("Pageserver status set to ready")
-
 	return ctrl.Result{}, nil
 }
 

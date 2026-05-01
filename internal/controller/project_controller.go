@@ -21,12 +21,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"syscall"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -34,6 +39,11 @@ import (
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
 	"oltp.molnett.org/neon-operator/utils"
 )
+
+type projectStatusInputs struct {
+	TenantIDErr error
+	AttachErr   error
+}
 
 // ProjectReconciler reconciles a Project object
 type ProjectReconciler struct {
@@ -79,46 +89,90 @@ func (r *ProjectReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *ProjectReconciler) reconcile(ctx context.Context, project *neonv1alpha1.Project) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if project.Status.Phase == "" {
-		if err := utils.SetPhases(ctx, r.Client, project, utils.SetProjectPendingStatus); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error setting pending status: %w", err)
-		}
-		log.Info("Project phase set to pending")
-	}
-
 	if project.Spec.TenantID == "" {
 		tenantID := utils.GenerateNeonID()
-
-		if err := utils.SetPhases(ctx, r.Client, project, utils.SetProjectCreatingStatus); err != nil {
-			return ctrl.Result{}, fmt.Errorf("error setting creating status: %w", err)
-		}
-
 		if err := r.updateTenantID(ctx, project, tenantID); err != nil {
 			log.Error(err, "Failed to update tenant ID")
-			if setErr := utils.SetPhases(ctx, r.Client, project, func(p *neonv1alpha1.Project) {
-				utils.SetProjectTenantCreationFailedStatus(p, fmt.Sprintf("Failed to update tenant ID: %v", err))
-			}); setErr != nil {
-				log.Error(setErr, "failed to set project status")
+			if statusErr := r.updateStatus(ctx, project, projectStatusInputs{TenantIDErr: fmt.Errorf("failed to update tenant ID: %w", err)}); statusErr != nil {
+				log.Error(statusErr, "failed to update project status")
 			}
 			return ctrl.Result{}, fmt.Errorf("failed to update tenant ID: %w", err)
 		}
-
 		log.Info("Generated and set tenant ID", "tenantID", tenantID)
 		return ctrl.Result{RequeueAfter: time.Second}, ErrRequeueAfterChange
 	}
 
-	err := r.ensureTenantOnPageserver(ctx, project)
-	if err != nil {
-		log.Error(err, "Failed to ensure tenant on pageserver")
+	attachErr := r.ensureTenantOnPageserver(ctx, project)
+	if attachErr != nil {
+		log.Error(attachErr, "Failed to ensure tenant on pageserver")
+	}
+
+	if statusErr := r.updateStatus(ctx, project, projectStatusInputs{AttachErr: attachErr}); statusErr != nil {
+		log.Error(statusErr, "failed to update project status")
+		return ctrl.Result{}, statusErr
+	}
+
+	if attachErr != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-
-	if err := utils.SetPhases(ctx, r.Client, project, utils.SetProjectReadyStatus); err != nil {
-		return ctrl.Result{}, fmt.Errorf("error setting ready status: %w", err)
-	}
-	log.Info("Project is ready")
-
 	return ctrl.Result{}, nil
+}
+
+func (r *ProjectReconciler) updateStatus(ctx context.Context, project *neonv1alpha1.Project, in projectStatusInputs) error {
+	return utils.PatchStatus(ctx, r.Client, project, func(p *neonv1alpha1.Project) {
+		p.Status.ObservedGeneration = p.Generation
+		conds := &p.Status.Conditions
+
+		switch {
+		case in.TenantIDErr != nil:
+			utils.SetCondition(p, conds, utils.ConditionTenantIDAssigned, metav1.ConditionFalse, utils.ReasonTenantIDPending, in.TenantIDErr.Error())
+		case p.Spec.TenantID != "":
+			utils.SetCondition(p, conds, utils.ConditionTenantIDAssigned, metav1.ConditionTrue, utils.ReasonAsExpected, "Tenant ID is assigned")
+		default:
+			utils.SetCondition(p, conds, utils.ConditionTenantIDAssigned, metav1.ConditionFalse, utils.ReasonTenantIDPending, "Tenant ID has not been generated yet")
+		}
+
+		switch {
+		case in.TenantIDErr != nil:
+			utils.SetCondition(p, conds, utils.ConditionAttached, metav1.ConditionFalse, utils.ReasonTenantIDPending, "Tenant ID assignment failed")
+		case in.AttachErr != nil:
+			reason := utils.ReasonAttachFailed
+			if isConnectionError(in.AttachErr) {
+				reason = utils.ReasonStorageControllerUnreachable
+			}
+			utils.SetCondition(p, conds, utils.ConditionAttached, metav1.ConditionFalse, reason, in.AttachErr.Error())
+		case p.Spec.TenantID == "":
+			utils.SetCondition(p, conds, utils.ConditionAttached, metav1.ConditionFalse, utils.ReasonTenantIDPending, "Tenant ID has not been assigned")
+		default:
+			utils.SetCondition(p, conds, utils.ConditionAttached, metav1.ConditionTrue, utils.ReasonAsExpected, "Tenant attached on storage controller")
+		}
+
+		if in.TenantIDErr == nil && in.AttachErr == nil && p.Spec.TenantID != "" {
+			utils.SetCondition(p, conds, utils.ConditionAvailable, metav1.ConditionTrue, utils.ReasonAsExpected, "Project is Available")
+			utils.SetCondition(p, conds, utils.ConditionProgressing, metav1.ConditionFalse, utils.ReasonAsExpected, "Project is at desired state")
+		} else {
+			utils.SetCondition(p, conds, utils.ConditionAvailable, metav1.ConditionFalse, utils.ReasonReconciling, "Project is not yet Available")
+			utils.SetCondition(p, conds, utils.ConditionProgressing, metav1.ConditionTrue, utils.ReasonReconciling, "Working toward desired state")
+		}
+	})
+}
+
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if utilnet.IsConnectionRefused(err) || utilnet.IsConnectionReset(err) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr)
 }
 
 func (r *ProjectReconciler) getProject(ctx context.Context, req ctrl.Request) (*neonv1alpha1.Project, error) {
@@ -175,11 +229,6 @@ func (r *ProjectReconciler) ensureTenantOnPageserver(ctx context.Context, projec
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Info("Failed to connect to storage controller, will retry", "error", err, "url", storageControllerURL)
-		if setErr := utils.SetPhases(ctx, r.Client, project, func(p *neonv1alpha1.Project) {
-			utils.SetProjectPageserverConnectionErrorStatus(p, fmt.Sprintf("Failed to connect to pageserver: %v", err))
-		}); setErr != nil {
-			log.Error(setErr, "failed to set project status")
-		}
 		return err
 	}
 	defer func() {
@@ -190,11 +239,6 @@ func (r *ProjectReconciler) ensureTenantOnPageserver(ctx context.Context, projec
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Info("Storage controller returned error status", "status", resp.Status)
-		if setErr := utils.SetPhases(ctx, r.Client, project, func(p *neonv1alpha1.Project) {
-			utils.SetProjectTenantCreationFailedStatus(p, fmt.Sprintf("Pageserver returned status: %s", resp.Status))
-		}); setErr != nil {
-			log.Error(setErr, "failed to set project status")
-		}
 		return fmt.Errorf("pageserver returned status: %s", resp.Status)
 	}
 

@@ -14,7 +14,17 @@ spec:
     singular: pageserver
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Available")].status
+      name: Available
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Progressing")].status
+      name: Progressing
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Pageserver is the Schema for the pageservers API
@@ -142,13 +152,12 @@ spec:
                   - type
                   type: object
                 type: array
-              phase:
-                type: string
-              phaseReason:
-                type: string
-            required:
-            - conditions
-            - phase
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                format: int64
+                type: integer
             type: object
         required:
         - spec
