@@ -1,0 +1,15 @@
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/name: test-cluster-storage-broker
+  name: test-cluster-storage-broker
+  namespace: neon
+spec:
+  ports:
+  - name: http
+    port: 50051
+    targetPort: 50051
+  selector:
+    app.kubernetes.io/name: test-cluster-storage-broker
+status:
+  loadBalancer: {}

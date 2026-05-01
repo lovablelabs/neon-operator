@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  name: test-cluster-storage-controller
+  namespace: neon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: test-cluster-storage-controller
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/name: test-cluster-storage-controller
+    spec:
+      containers:
+      - args:
+        - --dev
+        - -l
+        - 0.0.0.0:8080
+        - --control-plane-url
+        - http://neon-controlplane:8081
+        - --initial-split-shards
+        - "0"
+        command:
+        - storage_controller
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              key: uri
+              name: test-cluster-storcon-db
+        image: neondatabase/neon:8463
+        imagePullPolicy: IfNotPresent
+        name: storage-controller
+        ports:
+        - containerPort: 8080
+          name: http
+        resources: {}
+status: {}
