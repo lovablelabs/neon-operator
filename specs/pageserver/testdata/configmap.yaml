@@ -1,0 +1,23 @@
+apiVersion: v1
+data:
+  pageserver.toml: |2
+
+    control_plane_api = "http://test-cluster-storage-controller:8080/upcall/v1/"
+    listen_pg_addr = "0.0.0.0:6400"
+    listen_http_addr = "0.0.0.0:9898"
+    broker_endpoint = "http://test-cluster-storage-broker:50051"
+    pg_distrib_dir='/usr/local/'
+    [remote_storage]
+    bucket_name = "test-bucket"
+    bucket_region = "us-east-1"
+    prefix_in_bucket = "pageserver"
+    endpoint = ""
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  labels:
+    molnett.org/cluster: test-cluster
+    molnett.org/component: pageserver
+    molnett.org/pageserver: test-pageserver
+  name: test-cluster-pageserver-0
+  namespace: neon

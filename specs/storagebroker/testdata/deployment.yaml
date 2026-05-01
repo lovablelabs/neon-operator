@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  name: test-cluster-storage-broker
+  namespace: neon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: test-cluster-storage-broker
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/name: test-cluster-storage-broker
+    spec:
+      containers:
+      - args:
+        - --listen-addr
+        - 0.0.0.0:50051
+        command:
+        - storage_broker
+        image: neondatabase/neon:8463
+        imagePullPolicy: IfNotPresent
+        name: storage-broker
+        ports:
+        - containerPort: 50051
+          name: http
+        resources: {}
+status: {}

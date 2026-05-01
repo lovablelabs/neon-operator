@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    molnett.org/branch: test-branch
+    molnett.org/cluster: test-cluster
+    molnett.org/component: compute-postgres
+    neon.tenant_id: ""
+    neon.timeline_id: ""
+  name: test-branch-postgres
+  namespace: neon
+spec:
+  ports:
+  - name: postgres
+    port: 55433
+    protocol: TCP
+    targetPort: 55433
+  selector:
+    app: test-branch-compute-node
+status:
+  loadBalancer: {}

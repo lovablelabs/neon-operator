@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  name: test-cluster-safekeeper-0
+  namespace: neon
+spec:
+  ports:
+  - name: pg
+    port: 5454
+    protocol: TCP
+    targetPort: 0
+  - name: http
+    port: 7676
+    protocol: TCP
+    targetPort: 0
+  selector:
+    molnett.org/safekeeper: test-safekeeper
+status:
+  loadBalancer: {}

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  creationTimestamp: null
+  labels:
+    molnett.org/cluster: test-cluster
+    molnett.org/component: pageserver
+    molnett.org/pageserver: test-pageserver
+  name: test-cluster-pageserver-0
+  namespace: neon
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+status: {}

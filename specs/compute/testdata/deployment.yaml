@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    neon.cluster_name: test-cluster
+    neon.compute_id: test-branch
+  creationTimestamp: null
+  labels:
+    app: test-branch-compute-node
+    molnett.org/branch: test-branch
+    molnett.org/cluster: test-cluster
+    molnett.org/component: compute
+    neon.tenant_id: ""
+    neon.timeline_id: ""
+  name: test-branch-compute-node
+  namespace: neon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-branch-compute-node
+      molnett.org/branch: test-branch
+      molnett.org/cluster: test-cluster
+      molnett.org/component: compute
+      neon.tenant_id: ""
+      neon.timeline_id: ""
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: test-branch-compute-node
+        molnett.org/branch: test-branch
+        molnett.org/cluster: test-cluster
+        molnett.org/component: compute
+        neon.tenant_id: ""
+        neon.timeline_id: ""
+    spec:
+      containers:
+      - command:
+        - bash
+        - -c
+        - echo "$INITIAL_SPEC_JSON" > /var/spec.json && /usr/local/bin/compute_ctl
+          --pgdata /.neon/data/pgdata --connstr=postgresql://cloud_admin:@0.0.0.0:55433/postgres
+          --compute-id test-branch -p http://neon-controlplane.neon:8081 --pgbin /usr/local/bin/postgres
+        env:
+        - name: OTEL_SDK_DISABLED
+          value: "true"
+        - name: INITIAL_SPEC_JSON
+          valueFrom:
+            configMapKeyRef:
+              key: spec.json
+              name: test-branch-compute-spec
+        image: neondatabase/compute-node-v17
+        name: compute-node
+        ports:
+        - containerPort: 55433
+          protocol: TCP
+        resources: {}
+        volumeMounts:
+        - mountPath: /var
+          name: spec-volume
+        - mountPath: /.neon/data
+          name: pgdata
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      volumes:
+      - emptyDir: {}
+        name: spec-volume
+      - emptyDir:
+          sizeLimit: 500Mi
+        name: pgdata
+status: {}
