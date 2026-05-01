@@ -18,305 +18,196 @@ package utils
 
 import (
 	"context"
+	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-
-	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
 )
 
-// StatusWithConditions defines the interface for status objects that have Conditions and Phase
-type StatusWithConditions interface {
-	GetConditions() []metav1.Condition
-	SetConditions([]metav1.Condition)
-	GetPhase() string
-	SetPhase(string)
+const (
+	ConditionAvailable                  = "Available"
+	ConditionProgressing                = "Progressing"
+	ConditionStorageControllerAvailable = "StorageControllerAvailable"
+	ConditionStorageBrokerAvailable     = "StorageBrokerAvailable"
+	ConditionTenantIDAssigned           = "TenantIDAssigned"
+	ConditionAttached                   = "Attached"
+	ConditionTimelineIDAssigned         = "TimelineIDAssigned"
+	ConditionTimelineCreated            = "TimelineCreated"
+	ConditionComputeReady               = "ComputeReady"
+	ConditionResourcesReady             = "ResourcesReady"
+)
+
+const (
+	ReasonAsExpected                   = "AsExpected"
+	ReasonReconciling                  = "Reconciling"
+	ReasonChildPodNotReady             = "ChildPodNotReady"
+	ReasonChildDeploymentNotAvailable  = "ChildDeploymentNotAvailable"
+	ReasonChildResourceMissing         = "ChildResourceMissing"
+	ReasonResourceCreateFailed         = "ResourceCreateFailed"
+	ReasonStorageControllerUnreachable = "StorageControllerUnreachable"
+	ReasonAttachFailed                 = "AttachFailed"
+	ReasonTenantIDPending              = "TenantIDPending"
+	ReasonTimelineIDPending            = "TimelineIDPending"
+	ReasonTimelineCreationFailed       = "TimelineCreationFailed"
+)
+
+// StatusObject is implemented by every CRD with a Status subresource so PatchStatus
+// can compare and copy status without a central type switch.
+type StatusObject interface {
+	client.Object
+	StatusValue() any
+	AssignStatusFrom(client.Object)
 }
 
-// SetPhases updates the resource status using provided functions
-func SetPhases[T client.Object](ctx context.Context, c client.Client, obj T, statusfns ...func(T)) error {
+// PodBackedStatus is implemented by CRDs whose readiness derives from a single
+// owned Pod (Pageserver, Safekeeper).
+type PodBackedStatus interface {
+	StatusObject
+	StatusConditions() *[]metav1.Condition
+	SetObservedGeneration(int64)
+}
+
+// SetCondition wraps meta.SetStatusCondition; it preserves LastTransitionTime
+// when only ObservedGeneration / Reason / Message change.
+func SetCondition(obj client.Object, conds *[]metav1.Condition, t string, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(conds, metav1.Condition{
+		Type:               t,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: obj.GetGeneration(),
+	})
+}
+
+// PatchStatus runs mutate on a fresh copy of obj and patches the status
+// subresource if the resulting status differs.
+func PatchStatus[T StatusObject](ctx context.Context, c client.Client, obj T, mutate func(T)) error {
 	log := logf.FromContext(ctx)
-
-	log.Info("Setting resource phases")
-
-	original := obj.DeepCopyObject().(T)
 
 	current := obj.DeepCopyObject().(T)
 	if err := c.Get(ctx, types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}, current); err != nil {
-		log.Info("Error getting resource", "error", err)
 		return err
 	}
 
 	updated := current.DeepCopyObject().(T)
+	mutate(updated)
 
-	for _, statusfn := range statusfns {
-		statusfn(updated)
-	}
-
-	originalStatus := getOriginalStatusForComparison(original)
-	updatedStatus := getOriginalStatusForComparison(updated)
-
-	if equality.Semantic.DeepEqual(originalStatus, updatedStatus) {
-		log.Info("Resource status unchanged")
+	if equality.Semantic.DeepEqual(current.StatusValue(), updated.StatusValue()) {
 		return nil
 	}
 
 	patchOptions := client.MergeFromWithOptions(current, client.MergeFromWithOptimisticLock{})
 	if err := c.Status().Patch(ctx, updated, patchOptions); err != nil {
-		log.Error(err, "error while updating resource status")
+		log.Error(err, "failed to patch status")
 		return err
 	}
 
-	copyUpdatedStatus(obj, updated)
-
+	obj.AssignStatusFrom(updated)
 	return nil
 }
 
-// getOriginalStatusForComparison extracts status for comparison
-func getOriginalStatusForComparison(obj client.Object) any {
-	switch v := obj.(type) {
-	case *neonv1alpha1.Cluster:
-		return v.Status
-	case *neonv1alpha1.Project:
-		return v.Status
-	case *neonv1alpha1.Branch:
-		return v.Status
-	case *neonv1alpha1.Safekeeper:
-		return v.Status
-	case *neonv1alpha1.Pageserver:
-		return v.Status
-	default:
-		return nil
+// UpdatePodBackedStatus applies the standard pod-backed condition pattern:
+// ResourcesReady reflects reconcileErr; Available + Progressing roll up the
+// child Pod's Ready condition. Used by Pageserver and Safekeeper.
+func UpdatePodBackedStatus[T PodBackedStatus](ctx context.Context, c client.Client, obj T, podName, label string, reconcileErr error) error {
+	pod := &corev1.Pod{}
+	podErr := c.Get(ctx, types.NamespacedName{Name: podName, Namespace: obj.GetNamespace()}, pod)
+
+	return PatchStatus(ctx, c, obj, func(o T) {
+		o.SetObservedGeneration(o.GetGeneration())
+		conds := o.StatusConditions()
+
+		if reconcileErr != nil {
+			SetCondition(o, conds, ConditionResourcesReady, metav1.ConditionFalse, ReasonResourceCreateFailed, reconcileErr.Error())
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, ReasonResourceCreateFailed, reconcileErr.Error())
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, "Retrying after resource creation failure")
+			return
+		}
+
+		SetCondition(o, conds, ConditionResourcesReady, metav1.ConditionTrue, ReasonAsExpected, "Child resources reconciled")
+
+		switch {
+		case apierrors.IsNotFound(podErr):
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, ReasonChildResourceMissing, fmt.Sprintf("%s Pod has not been observed yet", label))
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, "Waiting for child Pod to appear")
+		case podErr != nil:
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionUnknown, ReasonChildResourceMissing, podErr.Error())
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, "Could not read child Pod")
+		case IsPodReady(pod):
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionTrue, ReasonAsExpected, fmt.Sprintf("%s Pod is Ready", label))
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionFalse, ReasonAsExpected, fmt.Sprintf("%s is at desired state", label))
+		default:
+			reason, message := PodNotReadyDetail(pod)
+			if reason == "" {
+				reason = ReasonChildPodNotReady
+				message = fmt.Sprintf("%s Pod is not Ready", label)
+			}
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, reason, message)
+			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling, fmt.Sprintf("Waiting for %s Pod readiness", label))
+		}
+	})
+}
+
+func IsPodReady(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
 	}
-}
-
-// copyUpdatedStatus copies the status from updated object to the original
-func copyUpdatedStatus(original client.Object, updated client.Object) {
-	switch orig := original.(type) {
-	case *neonv1alpha1.Cluster:
-		if upd, ok := updated.(*neonv1alpha1.Cluster); ok {
-			orig.Status = upd.Status
-		}
-	case *neonv1alpha1.Project:
-		if upd, ok := updated.(*neonv1alpha1.Project); ok {
-			orig.Status = upd.Status
-		}
-	case *neonv1alpha1.Branch:
-		if upd, ok := updated.(*neonv1alpha1.Branch); ok {
-			orig.Status = upd.Status
-		}
-	case *neonv1alpha1.Safekeeper:
-		if upd, ok := updated.(*neonv1alpha1.Safekeeper); ok {
-			orig.Status = upd.Status
-		}
-	case *neonv1alpha1.Pageserver:
-		if upd, ok := updated.(*neonv1alpha1.Pageserver); ok {
-			orig.Status = upd.Status
-		}
-	}
-}
-
-// getObjectStatus extracts the status from any of our CRD objects
-func getObjectStatus(obj client.Object) StatusWithConditions {
-	switch v := obj.(type) {
-	case *neonv1alpha1.Cluster:
-		return &v.Status
-	case *neonv1alpha1.Project:
-		return &v.Status
-	case *neonv1alpha1.Branch:
-		return &v.Status
-	case *neonv1alpha1.Safekeeper:
-		return &v.Status
-	case *neonv1alpha1.Pageserver:
-		return &v.Status
-	default:
-		return nil
-	}
-}
-
-// SetPhase sets a generic creating phase with Ready condition false
-func SetPhase[T client.Object](obj T, phase string) {
-	status := getObjectStatus(obj)
-	status.SetPhase(phase)
-	status.SetConditions(updateCondition(status.GetConditions(), metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "ResourceIsNotReady",
-		Message:            "Resource Is Not Ready",
-		LastTransitionTime: metav1.Now(),
-	}))
-
-}
-
-// SetError sets a generic error phase with Ready condition false and error message
-func SetError[T client.Object](obj T, phase, reason, message string) {
-	status := getObjectStatus(obj)
-	status.SetPhase(phase)
-	status.SetConditions(updateCondition(status.GetConditions(), metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}))
-}
-
-// SetClusterCreatingStatus sets the cluster to creating phase with Ready condition false
-func SetClusterCreatingStatus(c *neonv1alpha1.Cluster) {
-	SetPhase(c, neonv1alpha1.ClusterPhaseCreating)
-}
-
-// SetClusterCannotCreateResourcesStatus sets the cluster to cannot create resources phase with Ready condition false
-func SetClusterCannotCreateResourcesStatus(c *neonv1alpha1.Cluster) {
-	SetError(c, neonv1alpha1.ClusterPhaseCannotCreateClusterResources, "ClusterIsNotReady", "Cluster Is Not Ready")
-}
-
-// SetClusterReadyStatus sets the cluster to ready phase with Ready condition true
-func SetClusterReadyStatus(c *neonv1alpha1.Cluster) {
-	status := getObjectStatus(c)
-	status.SetPhase(neonv1alpha1.ClusterPhaseReady)
-	status.SetConditions(updateCondition(status.GetConditions(), metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "ClusterIsReady",
-		Message:            "Cluster is ready",
-		LastTransitionTime: metav1.Now(),
-	}))
-}
-
-// SetSafekeeperCreatingStatus sets the safekeeper to creating phase with Ready condition false
-func SetSafekeeperCreatingStatus(sk *neonv1alpha1.Safekeeper) {
-	SetPhase(sk, neonv1alpha1.SafekeeperPhaseCreating)
-}
-
-// SetSafekeeperInvalidSpecStatus sets the safekeeper to cannot create resources phase with Ready condition false
-func SetSafekeeperInvalidSpecStatus(c *neonv1alpha1.Safekeeper) {
-	SetError(c, neonv1alpha1.SafekeeperPhaseInvalidSpec, "SafekeeperIsNotReady", "Safekeeper Is Not Ready")
-}
-
-// SetSafekeeperCannotCreateResourcesStatus sets the cluster to cannot create resources phase with Ready condition false
-func SetSafekeeperCannotCreateResourcesStatus(c *neonv1alpha1.Safekeeper) {
-	SetError(c, neonv1alpha1.SafekeeperPhaseCannotCreateResources, "SafekeeperIsNotReady", "Safekeeper Is Not Ready")
-}
-
-// SetSafekeeperReadyStatus sets the safekeeper to ready phase with Ready condition true
-func SetSafekeeperReadyStatus(sk *neonv1alpha1.Safekeeper) {
-	status := getObjectStatus(sk)
-	status.SetPhase(neonv1alpha1.SafekeeperPhaseReady)
-	status.SetConditions(updateCondition(status.GetConditions(), metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "SafekeeperIsReady",
-		Message:            "Safekeeper is ready",
-		LastTransitionTime: metav1.Now(),
-	}))
-}
-
-// SetPageserverCreatingStatus sets the pageserver to creating phase with Ready condition false
-func SetPageserverCreatingStatus(ps *neonv1alpha1.Pageserver) {
-	SetPhase(ps, neonv1alpha1.PageserverPhaseCreating)
-}
-
-// SetPageserverInvalidSpecStatus sets the pageserver to cannot create resources phase with Ready condition false
-func SetPageserverInvalidSpecStatus(ps *neonv1alpha1.Pageserver) {
-	SetError(ps, neonv1alpha1.PageserverPhaseInvalidSpec, "PageserverIsNotReady", "Pageserver Is Not Ready")
-}
-
-// SetPageserverCannotCreateResourcesStatus sets the pageserver to cannot create resources phase
-// with Ready condition false
-func SetPageserverCannotCreateResourcesStatus(ps *neonv1alpha1.Pageserver) {
-	SetError(ps, neonv1alpha1.PageserverPhaseCannotCreateResources, "PageserverIsNotReady", "Pageserver Is Not Ready")
-}
-
-// SetPageserverReadyStatus sets the pageserver to ready phase with Ready condition true
-func SetPageserverReadyStatus(ps *neonv1alpha1.Pageserver) {
-	status := getObjectStatus(ps)
-	status.SetPhase(neonv1alpha1.PageserverPhaseReady)
-	status.SetConditions(updateCondition(status.GetConditions(), metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "PageserverIsReady",
-		Message:            "Pageserver is ready",
-		LastTransitionTime: metav1.Now(),
-	}))
-}
-
-// SetProjectPendingStatus sets the project to pending phase with Ready condition false
-func SetProjectPendingStatus(p *neonv1alpha1.Project) {
-	SetPhase(p, neonv1alpha1.ProjectPhasePending)
-}
-
-// SetProjectCreatingStatus sets the project to creating phase with Ready condition false
-func SetProjectCreatingStatus(p *neonv1alpha1.Project) {
-	SetPhase(p, neonv1alpha1.ProjectPhaseCreating)
-}
-
-// SetProjectReadyStatus sets the project to ready phase with Ready condition true
-func SetProjectReadyStatus(p *neonv1alpha1.Project) {
-	status := getObjectStatus(p)
-	status.SetPhase(neonv1alpha1.ProjectPhaseReady)
-	status.SetConditions(updateCondition(status.GetConditions(), metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "ProjectIsReady",
-		Message:            "Project is ready",
-		LastTransitionTime: metav1.Now(),
-	}))
-}
-
-// SetProjectTenantCreationFailedStatus sets the project to tenant creation failed phase with Ready condition false
-func SetProjectTenantCreationFailedStatus(p *neonv1alpha1.Project, message string) {
-	SetError(p, neonv1alpha1.ProjectPhaseTenantCreationFailed, "TenantCreationFailed", message)
-}
-
-// SetProjectPageserverConnectionErrorStatus sets the project to pageserver connection error phase
-// with Ready condition false
-func SetProjectPageserverConnectionErrorStatus(p *neonv1alpha1.Project, message string) {
-	SetError(p, neonv1alpha1.ProjectPhasePageserverConnectionError, "PageserverConnectionError", message)
-}
-
-// SetBranchCreatingStatus sets the branch to creating phase with Ready condition false
-func SetBranchCreatingStatus(b *neonv1alpha1.Branch) {
-	SetPhase(b, neonv1alpha1.BranchPhaseCreating)
-}
-
-// SetBranchReadyStatus sets the branch to ready phase with Ready condition true
-func SetBranchReadyStatus(b *neonv1alpha1.Branch) {
-	status := getObjectStatus(b)
-	status.SetPhase(neonv1alpha1.BranchPhaseReady)
-	status.SetConditions(updateCondition(status.GetConditions(), metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "BranchIsReady",
-		Message:            "Branch is ready",
-		LastTransitionTime: metav1.Now(),
-	}))
-}
-
-// SetBranchCannotCreateResourcesStatus sets the branch to cannot create resources phase with Ready condition false
-func SetBranchCannotCreateResourcesStatus(b *neonv1alpha1.Branch) {
-	SetError(b, neonv1alpha1.BranchPhaseCannotCreateResources, "BranchIsNotReady", "Branch Is Not Ready")
-}
-
-// SetBranchTimelineCreationFailedStatus sets the branch to timeline creation failed phase with Ready condition false
-func SetBranchTimelineCreationFailedStatus(b *neonv1alpha1.Branch, message string) {
-	SetError(b, neonv1alpha1.BranchPhaseTimelineCreationFailed, "TimelineCreationFailed", message)
-}
-
-// updateCondition updates or adds a condition to the conditions slice
-func updateCondition(conditions []metav1.Condition, newCondition metav1.Condition) []metav1.Condition {
-	// Find existing condition with the same type
-	for i, condition := range conditions {
-		if condition.Type == newCondition.Type {
-			// Update existing condition
-			conditions[i] = newCondition
-			return conditions
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
 		}
 	}
+	return false
+}
 
-	// Add new condition if not found
-	return append(conditions, newCondition)
+// PodNotReadyDetail returns a kubelet-supplied (reason, message) describing why
+// a Pod isn't Ready: the first informative Waiting or non-zero Terminated state
+// across init and main containers. Returns ("", "") when nothing actionable is
+// surfaced — callers should fall back to a generic message.
+func PodNotReadyDetail(pod *corev1.Pod) (reason, message string) {
+	if pod == nil {
+		return "", ""
+	}
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, cs := range statuses {
+			if w := cs.State.Waiting; w != nil && w.Reason != "" {
+				msg := w.Message
+				if msg == "" {
+					msg = fmt.Sprintf("container %q is %s", cs.Name, w.Reason)
+				}
+				return w.Reason, msg
+			}
+			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+				reason := t.Reason
+				if reason == "" {
+					reason = "ContainerTerminated"
+				}
+				msg := t.Message
+				if msg == "" {
+					msg = fmt.Sprintf("container %q exited with code %d", cs.Name, t.ExitCode)
+				}
+				return reason, msg
+			}
+		}
+	}
+	return "", ""
+}
+
+func IsDeploymentAvailable(dep *appsv1.Deployment) bool {
+	if dep == nil {
+		return false
+	}
+	for _, c := range dep.Status.Conditions {
+		if c.Type == appsv1.DeploymentAvailable {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
