@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
+	"oltp.molnett.org/neon-operator/specs/storagecontroller"
 	"oltp.molnett.org/neon-operator/utils"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -591,7 +592,7 @@ func (c *StorageControllerClient) GetTenantInfo(
 	log *slog.Logger,
 	tenantID string,
 ) (*TenantInfo, error) {
-	url := fmt.Sprintf("http://%s-storage-controller:8080/control/v1/tenant/%s", c.clusterName, tenantID)
+	url := fmt.Sprintf("%s/control/v1/tenant/%s", storagecontroller.URL(c.clusterName), tenantID)
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	resp, err := httpClient.Get(url)

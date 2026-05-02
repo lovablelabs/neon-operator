@@ -32,6 +32,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
+	"oltp.molnett.org/neon-operator/specs/storagebroker"
+	"oltp.molnett.org/neon-operator/specs/storagecontroller"
 	"oltp.molnett.org/neon-operator/utils"
 )
 
@@ -105,8 +107,8 @@ func (r *ClusterReconciler) reconcile(ctx context.Context, cluster *neonv1alpha1
 }
 
 func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *neonv1alpha1.Cluster, reconcileErr error) error {
-	scAvailable, scReason, scMessage := r.deploymentState(ctx, cluster, fmt.Sprintf("%s-storage-controller", cluster.Name), "Storage controller")
-	sbAvailable, sbReason, sbMessage := r.deploymentState(ctx, cluster, fmt.Sprintf("%s-storage-broker", cluster.Name), "Storage broker")
+	scAvailable, scReason, scMessage := r.deploymentState(ctx, cluster, storagecontroller.Name(cluster.Name), "Storage controller")
+	sbAvailable, sbReason, sbMessage := r.deploymentState(ctx, cluster, storagebroker.Name(cluster.Name), "Storage broker")
 
 	return utils.PatchStatus(ctx, r.Client, cluster, func(c *neonv1alpha1.Cluster) {
 		c.Status.ObservedGeneration = c.Generation

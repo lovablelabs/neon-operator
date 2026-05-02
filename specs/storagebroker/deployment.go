@@ -11,7 +11,7 @@ import (
 )
 
 func Deployment(cluster *v1alpha1.Cluster) *appsv1.Deployment {
-	storageBrokerName := fmt.Sprintf("%s-storage-broker", cluster.Name)
+	storageBrokerName := Name(cluster.Name)
 
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
@@ -48,12 +48,12 @@ func Deployment(cluster *v1alpha1.Cluster) *appsv1.Deployment {
 								"storage_broker",
 							},
 							Args: []string{
-								"--listen-addr", "0.0.0.0:50051",
+								"--listen-addr", fmt.Sprintf("0.0.0.0:%d", Port),
 							},
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "http",
-									ContainerPort: 50051,
+									ContainerPort: Port,
 								},
 							},
 						},

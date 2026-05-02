@@ -11,7 +11,7 @@ import (
 )
 
 func Deployment(cluster *v1alpha1.Cluster) *appsv1.Deployment {
-	storageControllerName := fmt.Sprintf("%s-storage-controller", cluster.Name)
+	storageControllerName := Name(cluster.Name)
 
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
@@ -50,7 +50,7 @@ func Deployment(cluster *v1alpha1.Cluster) *appsv1.Deployment {
 							Args: []string{
 								"--dev",
 								"-l",
-								"0.0.0.0:8080",
+								fmt.Sprintf("0.0.0.0:%d", Port),
 								"--control-plane-url",
 								"http://neon-controlplane:8081",
 								"--initial-split-shards",
@@ -72,7 +72,7 @@ func Deployment(cluster *v1alpha1.Cluster) *appsv1.Deployment {
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "http",
-									ContainerPort: 8080,
+									ContainerPort: Port,
 								},
 							},
 						},
