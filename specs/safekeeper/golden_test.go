@@ -21,9 +21,9 @@ func TestSpecs(t *testing.T) {
 		name string
 		obj  any
 	}{
-		{"pod", safekeeper.Pod(sk, fixtures.DefaultNeonImage)},
-		{"pvc", safekeeper.PersistentVolumeClaim(sk)},
+		{"statefulset", safekeeper.StatefulSet(sk, fixtures.DefaultNeonImage)},
 		{"service", safekeeper.Service(sk)},
+		{"headless_service", safekeeper.HeadlessService(sk)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -22,9 +22,9 @@ func TestSpecs(t *testing.T) {
 		name string
 		obj  any
 	}{
-		{"pod", pageserver.Pod(ps, fixtures.DefaultNeonImage)},
-		{"pvc", pageserver.PersistentVolumeClaim(ps)},
+		{"statefulset", pageserver.StatefulSet(ps, fixtures.DefaultNeonImage)},
 		{"service", pageserver.Service(ps)},
+		{"headless_service", pageserver.HeadlessService(ps)},
 		{"configmap", pageserver.ConfigMap(ps, bucket)},
 	}
 	for _, tc := range cases {

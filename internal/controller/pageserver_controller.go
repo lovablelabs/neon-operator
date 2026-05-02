@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,10 +30,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
+	pageserverspec "oltp.molnett.org/neon-operator/specs/pageserver"
 	"oltp.molnett.org/neon-operator/utils"
 )
 
-// PageserverReconciler reconciles a Pageserver object
 type PageserverReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -41,8 +42,8 @@ type PageserverReconciler struct {
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=pageservers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=pageservers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=pageservers/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
@@ -95,8 +96,8 @@ func (r *PageserverReconciler) reconcile(ctx context.Context, pageserver *neonv1
 		log.Error(createErr, "error while creating pageserver resources")
 	}
 
-	podName := fmt.Sprintf("%s-pageserver-%d", pageserver.Spec.Cluster, pageserver.Spec.ID)
-	if err := utils.UpdatePodBackedStatus(ctx, r.Client, pageserver, podName, "Pageserver", createErr); err != nil {
+	stsName := pageserverspec.Name(pageserver)
+	if err := utils.UpdateSTSBackedStatus(ctx, r.Client, pageserver, stsName, "Pageserver", createErr); err != nil {
 		log.Error(err, "failed to update pageserver status")
 		return ctrl.Result{}, err
 	}
@@ -107,12 +108,10 @@ func (r *PageserverReconciler) reconcile(ctx context.Context, pageserver *neonv1
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
 func (r *PageserverReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&neonv1alpha1.Pageserver{}).
-		Owns(&corev1.PersistentVolumeClaim{}).
-		Owns(&corev1.Pod{}).
+		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
 		Named("pageserver").

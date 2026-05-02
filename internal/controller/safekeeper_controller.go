@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,10 +30,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
+	safekeeperspec "oltp.molnett.org/neon-operator/specs/safekeeper"
 	"oltp.molnett.org/neon-operator/utils"
 )
 
-// SafekeeperReconciler reconciles a Safekeeper object
 type SafekeeperReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -41,8 +42,8 @@ type SafekeeperReconciler struct {
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=safekeepers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=safekeepers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=neon.oltp.molnett.org,resources=safekeepers/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 func (r *SafekeeperReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -94,8 +95,8 @@ func (r *SafekeeperReconciler) reconcile(ctx context.Context, safekeeper *neonv1
 		log.Error(createErr, "error while creating safekeeper resources")
 	}
 
-	podName := fmt.Sprintf("%s-safekeeper-%d", safekeeper.Spec.Cluster, safekeeper.Spec.ID)
-	if err := utils.UpdatePodBackedStatus(ctx, r.Client, safekeeper, podName, "Safekeeper", createErr); err != nil {
+	stsName := safekeeperspec.Name(safekeeper)
+	if err := utils.UpdateSTSBackedStatus(ctx, r.Client, safekeeper, stsName, "Safekeeper", createErr); err != nil {
 		log.Error(err, "failed to update safekeeper status")
 		return ctrl.Result{}, err
 	}
@@ -106,12 +107,10 @@ func (r *SafekeeperReconciler) reconcile(ctx context.Context, safekeeper *neonv1
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
 func (r *SafekeeperReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&neonv1alpha1.Safekeeper{}).
-		Owns(&corev1.PersistentVolumeClaim{}).
-		Owns(&corev1.Pod{}).
+		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Named("safekeeper").
 		Complete(r)

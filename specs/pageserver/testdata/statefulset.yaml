@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  creationTimestamp: null
+  labels:
+    molnett.org/cluster: test-cluster
+    molnett.org/component: pageserver
+    molnett.org/pageserver: test-pageserver
+  name: test-cluster-pageserver-0
+  namespace: neon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      molnett.org/pageserver: test-pageserver
+  serviceName: test-cluster-pageserver-0-headless
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        molnett.org/cluster: test-cluster
+        molnett.org/component: pageserver
+        molnett.org/pageserver: test-pageserver
+    spec:
+      containers:
+      - command:
+        - /usr/local/bin/pageserver
+        env:
+        - name: RUST_LOG
+          value: debug
+        - name: DEFAULT_PG_VERSION
+          value: "16"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: AWS_ACCESS_KEY_ID
+              name: test-cluster-bucket-creds
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: AWS_SECRET_ACCESS_KEY
+              name: test-cluster-bucket-creds
+        - name: AWS_REGION
+          valueFrom:
+            secretKeyRef:
+              key: AWS_REGION
+              name: test-cluster-bucket-creds
+        - name: BUCKET_NAME
+          valueFrom:
+            secretKeyRef:
+              key: BUCKET_NAME
+              name: test-cluster-bucket-creds
+        - name: AWS_ENDPOINT_URL
+          valueFrom:
+            secretKeyRef:
+              key: AWS_ENDPOINT_URL
+              name: test-cluster-bucket-creds
+        image: neondatabase/neon:8463
+        imagePullPolicy: Always
+        name: pageserver
+        ports:
+        - containerPort: 6400
+        - containerPort: 9898
+        resources: {}
+        volumeMounts:
+        - mountPath: /data/.neon/tenants
+          name: pageserver-storage
+        - mountPath: /data/.neon
+          name: config
+      initContainers:
+      - args:
+        - |
+          echo "id=0" > /config/identity.toml
+
+          echo "{\"host\":\"test-cluster-pageserver-0.neon\"," \
+               "\"http_host\":\"test-cluster-pageserver-0.neon\"," \
+               "\"http_port\":9898,\"port\":6400," \
+               "\"availability_zone_id\":\"se-ume\"}" > /config/metadata.json
+
+          cp /configmap/pageserver.toml /config/pageserver.toml
+        command:
+        - /bin/sh
+        - -c
+        image: busybox:latest
+        name: setup-config
+        resources: {}
+        volumeMounts:
+        - mountPath: /configmap
+          name: pageserver-config
+        - mountPath: /config
+          name: config
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsUser: 1000
+      volumes:
+      - configMap:
+          name: test-cluster-pageserver-0
+        name: pageserver-config
+      - emptyDir: {}
+        name: config
+  updateStrategy: {}
+  volumeClaimTemplates:
+  - metadata:
+      creationTimestamp: null
+      labels:
+        molnett.org/cluster: test-cluster
+        molnett.org/component: pageserver
+        molnett.org/pageserver: test-pageserver
+      name: pageserver-storage
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+    status: {}
+status:
+  availableReplicas: 0
+  replicas: 0

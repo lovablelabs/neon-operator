@@ -66,9 +66,7 @@ type StatusObject interface {
 	AssignStatusFrom(client.Object)
 }
 
-// PodBackedStatus is implemented by CRDs whose readiness derives from a single
-// owned Pod (Pageserver, Safekeeper).
-type PodBackedStatus interface {
+type ConditionedStatus interface {
 	StatusObject
 	StatusConditions() *[]metav1.Condition
 	SetObservedGeneration(int64)
@@ -92,8 +90,6 @@ func SetCondition(
 	})
 }
 
-// PatchStatus runs mutate on a fresh copy of obj and patches the status
-// subresource if the resulting status differs.
 func PatchStatus[T StatusObject](ctx context.Context, c client.Client, obj T, mutate func(T)) error {
 	log := logf.FromContext(ctx)
 
@@ -119,18 +115,15 @@ func PatchStatus[T StatusObject](ctx context.Context, c client.Client, obj T, mu
 	return nil
 }
 
-// UpdatePodBackedStatus applies the standard pod-backed condition pattern:
-// ResourcesReady reflects reconcileErr; Available + Progressing roll up the
-// child Pod's Ready condition. Used by Pageserver and Safekeeper.
-func UpdatePodBackedStatus[T PodBackedStatus](
+func UpdateSTSBackedStatus[T ConditionedStatus](
 	ctx context.Context,
 	c client.Client,
 	obj T,
-	podName, label string,
+	stsName, label string,
 	reconcileErr error,
 ) error {
-	pod := &corev1.Pod{}
-	podErr := c.Get(ctx, types.NamespacedName{Name: podName, Namespace: obj.GetNamespace()}, pod)
+	sts := &appsv1.StatefulSet{}
+	stsErr := c.Get(ctx, types.NamespacedName{Name: stsName, Namespace: obj.GetNamespace()}, sts)
 
 	return PatchStatus(ctx, c, obj, func(o T) {
 		o.SetObservedGeneration(o.GetGeneration())
@@ -149,43 +142,47 @@ func UpdatePodBackedStatus[T PodBackedStatus](
 			"Child resources reconciled")
 
 		switch {
-		case apierrors.IsNotFound(podErr):
+		case apierrors.IsNotFound(stsErr):
 			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, ReasonChildResourceMissing,
-				fmt.Sprintf("%s Pod has not been observed yet", label))
+				fmt.Sprintf("%s StatefulSet has not been observed yet", label))
 			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling,
-				"Waiting for child Pod to appear")
-		case podErr != nil:
-			SetCondition(o, conds, ConditionAvailable, metav1.ConditionUnknown, ReasonChildResourceMissing, podErr.Error())
+				"Waiting for child StatefulSet to appear")
+		case stsErr != nil:
+			SetCondition(o, conds, ConditionAvailable, metav1.ConditionUnknown, ReasonChildResourceMissing, stsErr.Error())
 			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling,
-				"Could not read child Pod")
-		case IsPodReady(pod):
+				"Could not read child StatefulSet")
+		case IsStatefulSetReady(sts):
 			SetCondition(o, conds, ConditionAvailable, metav1.ConditionTrue, ReasonAsExpected,
-				fmt.Sprintf("%s Pod is Ready", label))
+				fmt.Sprintf("%s StatefulSet is Ready", label))
 			SetCondition(o, conds, ConditionProgressing, metav1.ConditionFalse, ReasonAsExpected,
 				fmt.Sprintf("%s is at desired state", label))
 		default:
-			reason, message := PodNotReadyDetail(pod)
+			pod := &corev1.Pod{}
+			podErr := c.Get(ctx, types.NamespacedName{Name: stsName + "-0", Namespace: obj.GetNamespace()}, pod)
+			reason, message := "", ""
+			if podErr == nil {
+				reason, message = PodNotReadyDetail(pod)
+			}
 			if reason == "" {
 				reason = ReasonChildPodNotReady
-				message = fmt.Sprintf("%s Pod is not Ready", label)
+				message = fmt.Sprintf("%s StatefulSet is not Ready", label)
 			}
 			SetCondition(o, conds, ConditionAvailable, metav1.ConditionFalse, reason, message)
 			SetCondition(o, conds, ConditionProgressing, metav1.ConditionTrue, ReasonReconciling,
-				fmt.Sprintf("Waiting for %s Pod readiness", label))
+				fmt.Sprintf("Waiting for %s StatefulSet readiness", label))
 		}
 	})
 }
 
-func IsPodReady(pod *corev1.Pod) bool {
-	if pod == nil {
+func IsStatefulSetReady(sts *appsv1.StatefulSet) bool {
+	if sts == nil {
 		return false
 	}
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady {
-			return c.Status == corev1.ConditionTrue
-		}
+	desired := int32(1)
+	if sts.Spec.Replicas != nil {
+		desired = *sts.Spec.Replicas
 	}
-	return false
+	return sts.Status.ObservedGeneration >= sts.Generation && sts.Status.ReadyReplicas >= desired
 }
 
 // PodNotReadyDetail returns a kubelet-supplied (reason, message) describing why
