@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  creationTimestamp: null
+  labels:
+    molnett.org/cluster: test-cluster
+    molnett.org/component: safekeeper
+    molnett.org/safekeeper: test-safekeeper
+  name: test-cluster-safekeeper-0
+  namespace: neon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      molnett.org/safekeeper: test-safekeeper
+  serviceName: test-cluster-safekeeper-0-headless
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        molnett.org/cluster: test-cluster
+        molnett.org/component: safekeeper
+        molnett.org/safekeeper: test-safekeeper
+    spec:
+      containers:
+      - args:
+        - --id=0
+        - --broker-endpoint=http://test-cluster-storage-broker:50051
+        - --listen-pg=0.0.0.0:5454
+        - --listen-http=0.0.0.0:7676
+        - --advertise-pg=test-cluster-safekeeper-0:5454
+        - --datadir
+        - /data
+        command:
+        - /usr/local/bin/safekeeper
+        image: neondatabase/neon:8463
+        name: safekeeper
+        ports:
+        - containerPort: 5454
+        - containerPort: 7676
+        resources: {}
+        volumeMounts:
+        - mountPath: /data
+          name: safekeeper-storage
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsUser: 1000
+  updateStrategy: {}
+  volumeClaimTemplates:
+  - metadata:
+      creationTimestamp: null
+      labels:
+        molnett.org/cluster: test-cluster
+        molnett.org/component: safekeeper
+        molnett.org/safekeeper: test-safekeeper
+      name: safekeeper-storage
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+    status: {}
+status:
+  availableReplicas: 0
+  replicas: 0

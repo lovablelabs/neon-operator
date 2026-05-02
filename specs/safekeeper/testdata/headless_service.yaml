@@ -6,9 +6,10 @@ metadata:
     molnett.org/cluster: test-cluster
     molnett.org/component: safekeeper
     molnett.org/safekeeper: test-safekeeper
-  name: test-cluster-safekeeper-0
+  name: test-cluster-safekeeper-0-headless
   namespace: neon
 spec:
+  clusterIP: None
   ports:
   - name: pg
     port: 5454

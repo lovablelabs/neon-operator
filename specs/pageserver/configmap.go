@@ -5,22 +5,18 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"oltp.molnett.org/neon-operator/api/v1alpha1"
+	"oltp.molnett.org/neon-operator/specs/storagebroker"
+	"oltp.molnett.org/neon-operator/specs/storagecontroller"
 )
 
-func ConfigMap(pageserver *v1alpha1.Pageserver, bucketSecret *corev1.Secret) *corev1.ConfigMap {
-	configMapName := fmt.Sprintf("%s-pageserver-%d", pageserver.Spec.Cluster, pageserver.Spec.ID)
-
-	// Extract values from secret
-	bucketName := string(bucketSecret.Data["BUCKET_NAME"])
-	awsRegion := string(bucketSecret.Data["AWS_REGION"])
-	awsEndpointURL := string(bucketSecret.Data["AWS_ENDPOINT_URL"])
-
+func ConfigMap(ps *v1alpha1.Pageserver, bucketSecret *corev1.Secret) *corev1.ConfigMap {
 	pageserverToml := fmt.Sprintf(`
-control_plane_api = "http://%s-storage-controller:8080/upcall/v1/"
+control_plane_api = "%s/upcall/v1/"
 listen_pg_addr = "0.0.0.0:6400"
 listen_http_addr = "0.0.0.0:9898"
-broker_endpoint = "http://%s-storage-broker:50051"
+broker_endpoint = "%s"
 pg_distrib_dir='/usr/local/'
 [remote_storage]
 bucket_name = "%s"
@@ -28,11 +24,11 @@ bucket_region = "%s"
 prefix_in_bucket = "pageserver"
 endpoint = "%s"
 `,
-		pageserver.Spec.Cluster,
-		pageserver.Spec.Cluster,
-		bucketName,
-		awsRegion,
-		awsEndpointURL,
+		storagecontroller.URL(ps.Spec.Cluster),
+		storagebroker.URL(ps.Spec.Cluster),
+		string(bucketSecret.Data["BUCKET_NAME"]),
+		string(bucketSecret.Data["AWS_REGION"]),
+		string(bucketSecret.Data["AWS_ENDPOINT_URL"]),
 	)
 
 	return &corev1.ConfigMap{
@@ -41,13 +37,9 @@ endpoint = "%s"
 			Kind:       "ConfigMap",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      configMapName,
-			Namespace: pageserver.Namespace,
-			Labels: map[string]string{
-				"molnett.org/cluster":    pageserver.Spec.Cluster,
-				"molnett.org/component":  "pageserver",
-				"molnett.org/pageserver": pageserver.Name,
-			},
+			Name:      Name(ps),
+			Namespace: ps.Namespace,
+			Labels:    labels(ps),
 		},
 		Data: map[string]string{
 			"pageserver.toml": pageserverToml,
