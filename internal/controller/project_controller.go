@@ -37,6 +37,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
+	"oltp.molnett.org/neon-operator/specs/storagecontroller"
 	"oltp.molnett.org/neon-operator/utils"
 )
 
@@ -212,7 +213,7 @@ func (r *ProjectReconciler) ensureTenantOnPageserver(ctx context.Context, projec
 
 	base := r.StorageControllerBaseURL
 	if base == "" {
-		base = fmt.Sprintf("http://%s-storage-controller:8080", project.Spec.ClusterName)
+		base = storagecontroller.URL(project.Spec.ClusterName)
 	}
 	storageControllerURL := fmt.Sprintf("%s/v1/tenant/%s/location_config", base, project.Spec.TenantID)
 
