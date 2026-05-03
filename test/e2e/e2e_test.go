@@ -29,6 +29,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
+	"oltp.molnett.org/neon-operator/test/fixtures"
 	"oltp.molnett.org/neon-operator/test/utils"
 )
 
@@ -271,15 +273,62 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
+	})
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+	Context("Neon Lifecycle", func() {
+		AfterEach(func() {
+			if CurrentSpecReport().Failed() {
+				dumpLifecycleDiagnostics(namespace)
+			}
+		})
+
+		It("reconciles Cluster, Project, and Branch and accepts SELECT 1", func() {
+			ctx := context.Background()
+			cli := newE2EClient()
+
+			By("creating MinIO and storage-DB infrastructure")
+			createInfra(ctx, cli, namespace)
+			waitForDeploymentAvailable(ctx, cli, namespace, lifecycleStorageDBName, lifecycleAvailableTimeout)
+			waitForDeploymentAvailable(ctx, cli, namespace, lifecycleMinIOName, lifecycleAvailableTimeout)
+
+			By("creating the MinIO bucket")
+			ensureMinIOBucket(namespace)
+
+			By("creating Cluster")
+			cluster := fixtures.NewCluster(lifecycleClusterName, namespace)
+			Expect(cli.Create(ctx, cluster)).To(Succeed())
+			waitForCRAvailable(ctx, cli, cluster)
+
+			By("creating Pageserver and Safekeepers")
+			pageserver := fixtures.NewPageserver(lifecyclePageserverName, namespace, lifecycleClusterName, lifecyclePageserverID)
+			Expect(cli.Create(ctx, pageserver)).To(Succeed())
+			safekeepers := make([]*neonv1alpha1.Safekeeper, 0, len(lifecycleSafekeeperIDs))
+			for _, id := range lifecycleSafekeeperIDs {
+				sk := fixtures.NewSafekeeper(fmt.Sprintf("safekeeper-e2e-%d", id), namespace, lifecycleClusterName, id)
+				Expect(cli.Create(ctx, sk)).To(Succeed())
+				safekeepers = append(safekeepers, sk)
+			}
+			waitForCRAvailable(ctx, cli, pageserver)
+			for _, sk := range safekeepers {
+				waitForCRAvailable(ctx, cli, sk)
+			}
+
+			By("creating Project")
+			project := fixtures.NewProject(lifecycleProjectName, namespace, lifecycleClusterName)
+			Expect(cli.Create(ctx, project)).To(Succeed())
+			waitForCRAvailable(ctx, cli, project)
+
+			By("creating Branch")
+			branch := fixtures.NewBranch(lifecycleBranchName, namespace, lifecycleProjectName)
+			Expect(cli.Create(ctx, branch)).To(Succeed())
+			waitForCRAvailable(ctx, cli, branch)
+
+			By("waiting for compute pod readiness")
+			podName := waitForComputePodReady(ctx, cli, namespace, lifecycleBranchName)
+
+			By("running SELECT 1 against the compute pod")
+			execSelectOne(namespace, podName)
+		})
 	})
 })
 

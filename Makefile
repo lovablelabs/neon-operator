@@ -86,6 +86,9 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 	@set -e; \
 	cleanup() { $(MAKE) cleanup-test-e2e; }; \
 	trap cleanup EXIT; \
+	tmpdir=$$(mktemp -d); \
+	export KUBECONFIG="$$tmpdir/kubeconfig"; \
+	$(KIND) export kubeconfig --name $(KIND_CLUSTER) --kubeconfig "$$KUBECONFIG"; \
 	KIND_CLUSTER=$(KIND_CLUSTER) go test ./test/e2e/ -v -ginkgo.v
 
 .PHONY: cleanup-test-e2e
