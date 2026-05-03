@@ -7,7 +7,7 @@ metadata:
 spec:
   id: 1
   cluster: basic-cluster
-  bucket_credentials_secret: tigris-bucket
+  bucket_credentials_secret: bucket-creds
   storage_config:
     size: 20Gi # Optional: storage size (default: 10Gi)
 ---
@@ -19,7 +19,7 @@ metadata:
 spec:
   id: 2
   cluster: basic-cluster
-  bucket_credentials_secret: tigris-bucket
+  bucket_credentials_secret: bucket-creds
   storage_config:
     size: 2Gi # Optional: storage size (default: 10Gi)
 ---
@@ -31,7 +31,7 @@ metadata:
 spec:
   id: 3
   cluster: basic-cluster
-  bucket_credentials_secret: tigris-bucket
+  bucket_credentials_secret: bucket-creds
   storage_config:
     size: 2Gi # Optional: storage size (default: 10Gi)
 ---
@@ -43,7 +43,7 @@ metadata:
 spec:
   id: 4
   cluster: basic-cluster
-  bucket_credentials_secret: tigris-bucket
+  bucket_credentials_secret: bucket-creds
   storage_config:
     size: 2Gi # Optional: storage size (default: 10Gi)
 ---
@@ -55,7 +55,7 @@ metadata:
 spec:
   id: 5
   cluster: basic-cluster
-  bucket_credentials_secret: tigris-bucket
+  bucket_credentials_secret: bucket-creds
   storage_config:
     size: 2Gi # Optional: storage size (default: 10Gi)
 ---
@@ -67,6 +67,6 @@ metadata:
 spec:
   id: 5
   cluster: basic-cluster
-  bucket_credentials_secret: tigris-bucket
+  bucket_credentials_secret: bucket-creds
   storage_config:
     size: 2Gi # Optional: storage size (default: 10Gi)

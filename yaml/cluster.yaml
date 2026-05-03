@@ -5,7 +5,7 @@ metadata:
   namespace: neon
 spec:
   num_pageservers: 3
-  bucket_credentials_secret: tigris-bucket
+  bucket_credentials_secret: bucket-creds
   storage_controller_database_url: "postgresql://user:pass@storage-controller/db"
   # Storage configuration for pageserver
   pageserver_storage:
