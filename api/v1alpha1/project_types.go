@@ -21,17 +21,23 @@ import (
 )
 
 // ProjectSpec defines the desired state of Project
+// +kubebuilder:validation:XValidation:rule="self.cluster == oldSelf.cluster",message="cluster is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.tenantId) || oldSelf.tenantId.size() == 0 || (has(self.tenantId) && self.tenantId == oldSelf.tenantId)",message="tenantId can be generated once, but cannot be changed after it is set"
 type ProjectSpec struct {
 	// Name of the cluster where the project will be created.
+	// +kubebuilder:validation:MinLength:=1
 	ClusterName string `json:"cluster"`
 
 	// Will be generated unless specified.
 	// Has to be a 32 character alphanumeric string.
 	// +optional
+	// +kubebuilder:validation:Pattern:=`^$|^[0-9a-f]{32}$`
 	TenantID string `json:"tenantId"`
 
 	// PostgreSQL version to use for the project.
 	// +optional
+	// +kubebuilder:validation:Enum=14;15;16;17
+	// +kubebuilder:default:=17
 	PGVersion int `json:"pgVersion"`
 }
 

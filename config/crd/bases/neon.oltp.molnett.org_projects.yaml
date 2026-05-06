@@ -51,18 +51,33 @@ spec:
             properties:
               cluster:
                 description: Name of the cluster where the project will be created.
+                minLength: 1
                 type: string
               pgVersion:
+                default: 17
                 description: PostgreSQL version to use for the project.
+                enum:
+                - 14
+                - 15
+                - 16
+                - 17
                 type: integer
               tenantId:
                 description: |-
                   Will be generated unless specified.
                   Has to be a 32 character alphanumeric string.
+                pattern: ^$|^[0-9a-f]{32}$
                 type: string
             required:
             - cluster
             type: object
+            x-kubernetes-validations:
+            - message: cluster is immutable
+              rule: self.cluster == oldSelf.cluster
+            - message: tenantId can be generated once, but cannot be changed after
+                it is set
+              rule: '!has(oldSelf.tenantId) || oldSelf.tenantId.size() == 0 || (has(self.tenantId)
+                && self.tenantId == oldSelf.tenantId)'
           status:
             description: status defines the observed state of Project
             properties:

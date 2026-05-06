@@ -21,18 +21,22 @@ import (
 )
 
 // BranchSpec defines the desired state of Branch
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.timelineID) || oldSelf.timelineID.size() == 0 || (has(self.timelineID) && self.timelineID == oldSelf.timelineID)",message="timelineID can be generated once, but cannot be changed after it is set"
+// +kubebuilder:validation:XValidation:rule="self.projectID == oldSelf.projectID",message="projectID is immutable"
 type BranchSpec struct {
 	// Will be generated unless specified.
 	// Has to be a 32 character alphanumeric string.
 	// +optional
+	// +kubebuilder:validation:Pattern:=`^$|^[0-9a-f]{32}$`
 	TimelineID string `json:"timelineID"`
 
 	// PGVersion specifies the PostgreSQL version to use for the branch.
-	// kubebuilder:validation:Enum=14;15;16;17
-	// kubebuilder:default:=17
+	// +kubebuilder:validation:Enum=14;15;16;17
+	// +kubebuilder:default:=17
 	PGVersion int `json:"pgVersion"`
 
 	// The ID of the Project this Branch belongs to
+	// +kubebuilder:validation:MinLength:=1
 	ProjectID string `json:"projectID"`
 }
 

@@ -22,18 +22,24 @@ import (
 )
 
 // ClusterSpec defines the desired state of Cluster
+// +kubebuilder:validation:XValidation:rule="has(self.bucketCredentialsSecret.name) && self.bucketCredentialsSecret.name.size() > 0",message="bucketCredentialsSecret.name is required"
+// +kubebuilder:validation:XValidation:rule="self.storageControllerDatabaseSecret.name.size() > 0",message="storageControllerDatabaseSecret.name is required"
+// +kubebuilder:validation:XValidation:rule="self.storageControllerDatabaseSecret.key.size() > 0",message="storageControllerDatabaseSecret.key is required"
 type ClusterSpec struct {
 	// Decides how many safekeepers to run in the cluster.
 	// +kubebuilder:default:=3
 	// +kubebuilder:validation:Minimum:=3
+	// +kubebuilder:validation:Maximum:=3
 	NumSafekeepers uint8 `json:"numSafekeepers"`
 
 	// Default PostgreSQL version to use if no version is specified in projects.
-	// kubebuilder:validation:Enum=14;15;16;17
+	// +kubebuilder:validation:Enum=14;15;16;17
+	// +kubebuilder:default:=17
 	DefaultPGVersion int `json:"defaultPGVersion"`
 
 	// The default Neon image to use for all neon-specific resources.
 	// +kubebuilder:default:="neondatabase/neon:8463"
+	// +kubebuilder:validation:MinLength:=1
 	NeonImage string `json:"neonImage"`
 
 	// Reference to a Secret containing credentials for accessing a storage bucket.

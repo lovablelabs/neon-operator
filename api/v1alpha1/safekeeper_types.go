@@ -26,17 +26,23 @@ type StorageConfig struct {
 	StorageClass *string `json:"storageClass,omitempty"`
 
 	// Size of the PVCs.
-	// kubebuilder:default:=10Gi
+	// +kubebuilder:default:="10Gi"
+	// +kubebuilder:validation:Pattern:=`^[0-9]+(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K|m)?$`
 	Size string `json:"size"`
 }
 
 // SafekeeperSpec defines the desired state of Safekeeper
+// +kubebuilder:validation:XValidation:rule="self.id == oldSelf.id",message="id is immutable"
+// +kubebuilder:validation:XValidation:rule="self.cluster == oldSelf.cluster",message="cluster is immutable"
+// +kubebuilder:validation:XValidation:rule="self.storageConfig.size == oldSelf.storageConfig.size",message="storageConfig.size is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.storageConfig.storageClass) == has(oldSelf.storageConfig.storageClass) && (!has(self.storageConfig.storageClass) || self.storageConfig.storageClass == oldSelf.storageConfig.storageClass)",message="storageConfig.storageClass is immutable"
 type SafekeeperSpec struct {
 	// ID which the safekeepers uses when registering with storage-controller
 	// This ID must be unique within the cluster.
 	ID uint32 `json:"id"`
 
 	// Used to deterministically setup which storage controller and broker to communicate with
+	// +kubebuilder:validation:MinLength:=1
 	Cluster string `json:"cluster"`
 
 	// PVC configuration
