@@ -213,9 +213,10 @@ func postComputeSpec(ctx context.Context,
 	}
 
 	adminServiceName := computeId + "-admin"
+	adminServiceKey := client.ObjectKey{Name: adminServiceName, Namespace: deployment.Namespace}
 	adminService := &corev1.Service{}
-	if err := k8sClient.Get(ctx, client.ObjectKey{Name: adminServiceName, Namespace: deployment.Namespace}, adminService); err != nil {
-		return fmt.Errorf("failed to get admin service %s/%s: %w", deployment.Namespace, adminServiceName, err)
+	if err := k8sClient.Get(ctx, adminServiceKey, adminService); err != nil {
+		return fmt.Errorf("failed to get admin service %s: %w", adminServiceKey, err)
 	}
 
 	url := fmt.Sprintf("http://%s.%s:3080/configure", adminServiceName, adminService.Namespace)
