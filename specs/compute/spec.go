@@ -87,6 +87,18 @@ type ComputeHookNotifyRequest struct {
 	Shards     []ComputeHookNotifyRequestShard `json:"shards"`
 }
 
+type NotifySafekeepersSafekeeper struct {
+	ID       uint64  `json:"id"`
+	Hostname *string `json:"hostname,omitempty"`
+}
+
+type NotifySafekeepersRequest struct {
+	TenantID    string                        `json:"tenant_id"`
+	TimelineID  string                        `json:"timeline_id"`
+	Generation  uint32                        `json:"generation"`
+	Safekeepers []NotifySafekeepersSafekeeper `json:"safekeepers"`
+}
+
 // Role represents a database role configuration
 type Role struct {
 	Name              string      `json:"name"`
@@ -126,6 +138,7 @@ type ComputeSpec struct {
 	SuspendTimeoutSeconds    int                      `json:"suspend_timeout_seconds"`
 	Cluster                  ClusterConfig            `json:"cluster"`
 	DeltaOperations          []interface{}            `json:"delta_operations"`
+	SafekeepersGeneration    *uint32                  `json:"safekeepers_generation,omitempty"`
 	SafekeeperConnstrings    []string                 `json:"safekeeper_connstrings"`
 	PageserverConnectionInfo PageserverConnectionInfo `json:"pageserver_connection_info"`
 }
@@ -143,14 +156,9 @@ func RefreshConfiguration(ctx context.Context,
 	request ComputeHookNotifyRequest,
 	deployment *appsv1.Deployment,
 	computeBaseURL string) error {
-	var computeId string
-	var exists bool
-
-	if annotations := deployment.GetAnnotations(); annotations != nil {
-		computeId, exists = annotations["neon.compute_id"]
-		if !exists {
-			return fmt.Errorf("failed to extract compute ID from annotations")
-		}
+	computeId, err := extractComputeID(deployment)
+	if err != nil {
+		return err
 	}
 
 	clusterName, err := extractClusterName(deployment)
@@ -162,12 +170,21 @@ func RefreshConfiguration(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("failed to generate compute spec: %w", err)
 	}
+
+	return postComputeSpec(ctx, log, k8sClient, spec, deployment, computeId, clusterName, computeBaseURL)
+}
+
+func postComputeSpec(ctx context.Context,
+	log *slog.Logger,
+	k8sClient client.Client,
+	spec *ComputeSpecResponse,
+	deployment *appsv1.Deployment,
+	computeId, clusterName, computeBaseURL string) error {
 	specBytes, err := json.Marshal(spec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal spec JSON: %w", err)
 	}
 
-	// Get JWT manager from secret to generate tokens
 	secretName := fmt.Sprintf("cluster-%s-jwt", clusterName)
 	secret := &corev1.Secret{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{Name: secretName, Namespace: "neon"}, secret); err != nil {
@@ -179,74 +196,65 @@ func RefreshConfiguration(ctx context.Context,
 		return fmt.Errorf("failed to create JWT manager from secret: %w", err)
 	}
 
-	log.Info("Successfully created JWT manager")
-
-	// Create JWT claims
 	now := time.Now()
 	claims := map[string]any{
 		"compute_id": computeId,
 		"aud":        "compute",
 		"roles":      []string{"compute_ctl:admin"},
-		"exp":        now.Add(1 * time.Hour).Unix(), // 1 hour expiry
-		"iat":        now.Unix(),                    // issued at
-		"iss":        "neon-operator",               // issuer
-		"sub":        computeId,                     // subject
+		"exp":        now.Add(1 * time.Hour).Unix(),
+		"iat":        now.Unix(),
+		"iss":        "neon-operator",
+		"sub":        computeId,
 	}
 
-	// Generate the signed JWT token
 	tokenString, err := jwtManager.GenerateToken(claims)
 	if err != nil {
 		return fmt.Errorf("failed to generate JWT token: %w", err)
 	}
 
-	log.Info("Successfully generated JWT token", "compute_id", computeId)
+	adminServiceName := computeId + "-admin"
+	adminServiceKey := client.ObjectKey{Name: adminServiceName, Namespace: deployment.Namespace}
+	adminService := &corev1.Service{}
+	if err := k8sClient.Get(ctx, adminServiceKey, adminService); err != nil {
+		return fmt.Errorf("failed to get admin service %s: %w", adminServiceKey, err)
+	}
 
-	tenentServices := &corev1.ServiceList{}
-
-	err = k8sClient.List(ctx, tenentServices, client.MatchingLabels{
-		"neon.tenant_id": request.TenantID})
+	url := fmt.Sprintf("http://%s.%s:3080/configure", adminServiceName, adminService.Namespace)
+	if computeBaseURL != "" {
+		url = computeBaseURL + "/configure"
+	}
+	log.Info("Calling /configure endpoint", "url", url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(specBytes))
 	if err != nil {
-		return fmt.Errorf("failed to get service based on tenant ID: %w", err)
+		return fmt.Errorf("failed to create request for service %s: %w", adminServiceName, err)
 	}
-	for _, service := range tenentServices.Items {
-		serviceName := service.Name
-		serviceNamespace := service.Namespace
-		expectedServiceName := computeId + "-admin"
-		if expectedServiceName == serviceName {
-			url := fmt.Sprintf("http://%s-admin.%s:3080/configure", computeId, serviceNamespace)
-			if computeBaseURL != "" {
-				url = computeBaseURL + "/configure"
-			}
-			log.Info("Calling /configure endpoint at URL: ", "URL is", url)
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBuffer(specBytes))
-			if err != nil {
-				return fmt.Errorf("failed to create request for service %s: %w", serviceName, err)
-			}
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenString))
-			req.Header.Set("Content-Type", "application/json")
-			computeClient := &http.Client{Timeout: 2 * time.Second}
-			resp, err := computeClient.Do(req)
-			if err != nil {
-				log.Info("Failed to call /configure ", "service", serviceName, "URL", url, "error", err)
-				return fmt.Errorf("failed to call /configure for service %s: %w", serviceName, err)
-			}
-			defer func() {
-				if err := resp.Body.Close(); err != nil {
-					log.Error("Failed to close request body", "error", err)
-				}
-			}()
-
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				log.Info("Failed to call /configure ", "service", serviceName, "status:", resp.Status)
-				return fmt.Errorf("failed to call /configure for service %s: %s", serviceName, resp.Status)
-			} else {
-				log.Info("Successfully called /configure ", "for service", serviceName, "url:", url)
-			}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenString))
+	req.Header.Set("Content-Type", "application/json")
+	computeClient := &http.Client{Timeout: 2 * time.Second}
+	resp, err := computeClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to call /configure for service %s: %w", adminServiceName, err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Error("Failed to close response body", "error", err)
 		}
+	}()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("failed to call /configure for service %s: %s", adminServiceName, resp.Status)
 	}
-
+	log.Info("Successfully called /configure", "service", adminServiceName, "url", url)
 	return nil
+}
+
+func extractComputeID(deployment *appsv1.Deployment) (string, error) {
+	if annotations := deployment.GetAnnotations(); annotations != nil {
+		if id, ok := annotations["neon.compute_id"]; ok {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("failed to extract compute ID from annotations")
 }
 
 // GenerateComputeSpec generates a compute specification JSON response
@@ -428,6 +436,56 @@ func FindTenantDeployments(ctx context.Context,
 	}
 
 	return deploymentList, nil
+}
+
+func FindTenantTimelineDeployments(ctx context.Context,
+	k8sClient client.Client,
+	tenantID, timelineID string) (*appsv1.DeploymentList, error) {
+	deploymentList := &appsv1.DeploymentList{}
+
+	if err := k8sClient.List(ctx, deploymentList, client.MatchingLabels{
+		"neon.tenant_id":   tenantID,
+		"neon.timeline_id": timelineID,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to list deployments: %w", err)
+	}
+
+	return deploymentList, nil
+}
+
+func RefreshSafekeepersConfiguration(ctx context.Context,
+	log *slog.Logger,
+	k8sClient client.Client,
+	req NotifySafekeepersRequest,
+	deployment *appsv1.Deployment,
+	computeBaseURL string) error {
+	computeId, err := extractComputeID(deployment)
+	if err != nil {
+		return err
+	}
+
+	clusterName, err := extractClusterName(deployment)
+	if err != nil {
+		return fmt.Errorf("failed to extract clustername from deployment: %w", err)
+	}
+
+	spec, err := GenerateComputeSpec(ctx, log, k8sClient, nil, computeId)
+	if err != nil {
+		return fmt.Errorf("failed to generate compute spec: %w", err)
+	}
+
+	connstrings := make([]string, len(req.Safekeepers))
+	for i, sk := range req.Safekeepers {
+		connstrings[i] = fmt.Sprintf(
+			"postgresql://postgres:@%s-safekeeper-%d.%s:5454",
+			clusterName, sk.ID, deployment.Namespace,
+		)
+	}
+	spec.Spec.SafekeeperConnstrings = connstrings
+	gen := req.Generation
+	spec.Spec.SafekeepersGeneration = &gen
+
+	return postComputeSpec(ctx, log, k8sClient, spec, deployment, computeId, clusterName, computeBaseURL)
 }
 
 // Placeholder functions that need to be implemented elsewhere
