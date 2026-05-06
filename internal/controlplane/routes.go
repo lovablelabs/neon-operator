@@ -21,6 +21,7 @@ func addRoutes(
 	mux.Handle("/healthz", logRequests(log, handleHealthCheck()))
 	mux.Handle("/readyz", logRequests(log, handleHealthCheck()))
 	mux.Handle("/notify-attach", logRequests(log, notifyAttach(log, k8sClient, computeBaseURL)))
+	mux.Handle("/notify-safekeepers", logRequests(log, notifySafekeepers(log, k8sClient, computeBaseURL)))
 }
 
 type responseWriter struct {
@@ -131,6 +132,62 @@ func notifyAttach(log *slog.Logger, k8sClient client.Client, computeBaseURL stri
 		if failcount > 0 {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Error("Failed to refresh configuration for some deployments", "failed_count", failcount, "total_count", len(deployments.Items))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+func notifySafekeepers(log *slog.Logger, k8sClient client.Client, computeBaseURL string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := r.Body.Close(); err != nil {
+				log.Error("Failed to close request body", "error", err)
+			}
+		}()
+		ctx := r.Context()
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Error("Failed to read request body", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		log.Info("Received notify safekeepers request", "request", string(body))
+
+		var req compute.NotifySafekeepersRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			log.Error("Failed to Unmarshal the request", "error", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		deployments, err := compute.FindTenantTimelineDeployments(ctx, k8sClient, req.TenantID, req.TimelineID)
+		if err != nil {
+			log.Error("Failed to find tenant timeline deployments", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if len(deployments.Items) == 0 {
+			log.Warn("No compute deployment for tenant/timeline", "tenant_id", req.TenantID, "timeline_id", req.TimelineID)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		var failcount int
+		for _, deployment := range deployments.Items {
+			if err := compute.RefreshSafekeepersConfiguration(ctx, log, k8sClient, req, &deployment, computeBaseURL); err != nil {
+				log.Error("Failed to refresh safekeepers configuration", "deployment", deployment.Name, "error", err)
+				failcount++
+				continue
+			}
+			log.Info("Successfully refreshed safekeepers configuration", "deployment", deployment.Name)
+		}
+
+		if failcount > 0 {
+			log.Error("Failed to refresh safekeepers configuration for some deployments", "failed_count", failcount, "total_count", len(deployments.Items))
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
