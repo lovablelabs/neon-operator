@@ -52,6 +52,7 @@ spec:
               cluster:
                 description: Used to deterministically setup which storage controller
                   and broker to communicate with
+                minLength: 1
                 type: string
               id:
                 description: |-
@@ -63,9 +64,9 @@ spec:
                 description: PVC configuration
                 properties:
                   size:
-                    description: |-
-                      Size of the PVCs.
-                      kubebuilder:default:=10Gi
+                    default: 10Gi
+                    description: Size of the PVCs.
+                    pattern: ^[0-9]+(Ei|Pi|Ti|Gi|Mi|Ki|E|P|T|G|M|K|m)?$
                     type: string
                   storageClass:
                     description: Name of the storage class to use for PVCs.
@@ -78,6 +79,17 @@ spec:
             - id
             - storageConfig
             type: object
+            x-kubernetes-validations:
+            - message: id is immutable
+              rule: self.id == oldSelf.id
+            - message: cluster is immutable
+              rule: self.cluster == oldSelf.cluster
+            - message: storageConfig.size is immutable
+              rule: self.storageConfig.size == oldSelf.storageConfig.size
+            - message: storageConfig.storageClass is immutable
+              rule: has(self.storageConfig.storageClass) == has(oldSelf.storageConfig.storageClass)
+                && (!has(self.storageConfig.storageClass) || self.storageConfig.storageClass
+                == oldSelf.storageConfig.storageClass)
           status:
             description: status defines the observed state of Safekeeper
             properties:

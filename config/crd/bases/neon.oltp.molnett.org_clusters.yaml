@@ -64,17 +64,24 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               defaultPGVersion:
-                description: |-
-                  Default PostgreSQL version to use if no version is specified in projects.
-                  kubebuilder:validation:Enum=14;15;16;17
+                default: 17
+                description: Default PostgreSQL version to use if no version is specified
+                  in projects.
+                enum:
+                - 14
+                - 15
+                - 16
+                - 17
                 type: integer
               neonImage:
                 default: neondatabase/neon:8463
                 description: The default Neon image to use for all neon-specific resources.
+                minLength: 1
                 type: string
               numSafekeepers:
                 default: 3
                 description: Decides how many safekeepers to run in the cluster.
+                maximum: 3
                 minimum: 3
                 type: integer
               storageControllerDatabaseSecret:
@@ -109,6 +116,14 @@ spec:
             - numSafekeepers
             - storageControllerDatabaseSecret
             type: object
+            x-kubernetes-validations:
+            - message: bucketCredentialsSecret.name is required
+              rule: has(self.bucketCredentialsSecret.name) && self.bucketCredentialsSecret.name.size()
+                > 0
+            - message: storageControllerDatabaseSecret.name is required
+              rule: self.storageControllerDatabaseSecret.name.size() > 0
+            - message: storageControllerDatabaseSecret.key is required
+              rule: self.storageControllerDatabaseSecret.key.size() > 0
           status:
             description: |-
               status defines the observed state of Cluster

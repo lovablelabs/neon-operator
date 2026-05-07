@@ -29,6 +29,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
 	"oltp.molnett.org/neon-operator/test/fixtures"
 	"oltp.molnett.org/neon-operator/test/utils"
@@ -36,6 +42,8 @@ import (
 
 // namespace where the project is deployed in
 const namespace = "neon"
+
+const validationUpdatedClusterName = "cluster-b"
 
 // serviceAccountName created for the project
 const serviceAccountName = "neon-controller-manager"
@@ -273,6 +281,212 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
+	})
+
+	Context("API validation", func() {
+		It("rejects unsupported values on create", func() {
+			ctx := context.Background()
+			cli := newE2EClient()
+			emptyClusterSecretName := func(c *neonv1alpha1.Cluster) {
+				c.Spec.BucketCredentialsSecret.Name = ""
+			}
+			emptyStorconSecretName := func(c *neonv1alpha1.Cluster) {
+				c.Spec.StorageControllerDatabaseSecret.Name = ""
+			}
+			emptyStorconSecretKey := func(c *neonv1alpha1.Cluster) {
+				c.Spec.StorageControllerDatabaseSecret.Key = ""
+			}
+			emptyPageserverSecretName := func(p *neonv1alpha1.Pageserver) {
+				p.Spec.BucketCredentialsSecret.Name = ""
+			}
+			badPageserverStorageSize := func(p *neonv1alpha1.Pageserver) {
+				p.Spec.StorageConfig.Size = "tenGi"
+			}
+			badSafekeeperStorageSize := func(s *neonv1alpha1.Safekeeper) {
+				s.Spec.StorageConfig.Size = "tenGi"
+			}
+			next := 0
+			name := func(prefix string) string {
+				next++
+				return fmt.Sprintf("validation-%s-%d", prefix, next)
+			}
+			cluster := func(mutate func(*neonv1alpha1.Cluster)) client.Object {
+				obj := fixtures.NewCluster(name("cluster"), namespace)
+				mutate(obj)
+				return obj
+			}
+			project := func(mutate func(*neonv1alpha1.Project)) client.Object {
+				obj := fixtures.NewProject(name("project"), namespace, "cluster-a")
+				mutate(obj)
+				return obj
+			}
+			branch := func(mutate func(*neonv1alpha1.Branch)) client.Object {
+				obj := fixtures.NewBranch(name("branch"), namespace, "project-a")
+				mutate(obj)
+				return obj
+			}
+			pageserver := func(mutate func(*neonv1alpha1.Pageserver)) client.Object {
+				obj := fixtures.NewPageserver(name("pageserver"), namespace, "cluster-a", 0)
+				mutate(obj)
+				return obj
+			}
+			safekeeper := func(mutate func(*neonv1alpha1.Safekeeper)) client.Object {
+				obj := fixtures.NewSafekeeper(name("safekeeper"), namespace, "cluster-a", 0)
+				mutate(obj)
+				return obj
+			}
+
+			for _, tc := range []struct {
+				name string
+				obj  client.Object
+			}{
+				{name: "Cluster numSafekeepers", obj: cluster(func(c *neonv1alpha1.Cluster) { c.Spec.NumSafekeepers = 4 })},
+				{name: "Cluster defaultPGVersion", obj: cluster(func(c *neonv1alpha1.Cluster) { c.Spec.DefaultPGVersion = 13 })},
+				{name: "Cluster neonImage", obj: cluster(func(c *neonv1alpha1.Cluster) { c.Spec.NeonImage = "" })},
+				{name: "Cluster bucketCredentialsSecret.name", obj: cluster(emptyClusterSecretName)},
+				{name: "Cluster storageControllerDatabaseSecret.name", obj: cluster(emptyStorconSecretName)},
+				{name: "Cluster storageControllerDatabaseSecret.key", obj: cluster(emptyStorconSecretKey)},
+				{name: "Project cluster", obj: project(func(p *neonv1alpha1.Project) { p.Spec.ClusterName = "" })},
+				{name: "Project tenantId", obj: project(func(p *neonv1alpha1.Project) { p.Spec.TenantID = "not-a-neon-id" })},
+				{name: "Project pgVersion", obj: project(func(p *neonv1alpha1.Project) { p.Spec.PGVersion = 13 })},
+				{name: "Branch projectID", obj: branch(func(b *neonv1alpha1.Branch) { b.Spec.ProjectID = "" })},
+				{name: "Branch timelineID", obj: branch(func(b *neonv1alpha1.Branch) { b.Spec.TimelineID = "not-a-neon-id" })},
+				{name: "Branch pgVersion", obj: branch(func(b *neonv1alpha1.Branch) { b.Spec.PGVersion = 13 })},
+				{name: "Pageserver cluster", obj: pageserver(func(p *neonv1alpha1.Pageserver) { p.Spec.Cluster = "" })},
+				{name: "Pageserver bucketCredentialsSecret.name", obj: pageserver(emptyPageserverSecretName)},
+				{name: "Pageserver storageConfig.size", obj: pageserver(badPageserverStorageSize)},
+				{name: "Safekeeper cluster", obj: safekeeper(func(s *neonv1alpha1.Safekeeper) { s.Spec.Cluster = "" })},
+				{name: "Safekeeper storageConfig.size", obj: safekeeper(badSafekeeperStorageSize)},
+			} {
+				By("expecting invalid create for " + tc.name)
+				err := cli.Create(ctx, tc.obj)
+				Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected invalid error for %s, got %v", tc.name, err)
+			}
+		})
+
+		It("rejects unsafe updates", func() {
+			ctx := context.Background()
+			cli := newE2EClient()
+			expectInvalidUpdate := func(rule string, update func() error) {
+				invalid := false
+				err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+					err := update()
+					if apierrors.IsInvalid(err) {
+						invalid = true
+						return nil
+					}
+					return err
+				})
+				Expect(err).NotTo(HaveOccurred(), "expected invalid update for %s, got %v", rule, err)
+				Expect(invalid).To(BeTrue(), "expected invalid update for %s", rule)
+			}
+			updateProject := func(key types.NamespacedName, mutate func(*neonv1alpha1.Project)) func() error {
+				return func() error {
+					obj := &neonv1alpha1.Project{}
+					if err := cli.Get(ctx, key, obj); err != nil {
+						return err
+					}
+					mutate(obj)
+					return cli.Update(ctx, obj)
+				}
+			}
+			updateBranch := func(key types.NamespacedName, mutate func(*neonv1alpha1.Branch)) func() error {
+				return func() error {
+					obj := &neonv1alpha1.Branch{}
+					if err := cli.Get(ctx, key, obj); err != nil {
+						return err
+					}
+					mutate(obj)
+					return cli.Update(ctx, obj)
+				}
+			}
+			updatePageserver := func(key types.NamespacedName, mutate func(*neonv1alpha1.Pageserver)) func() error {
+				return func() error {
+					obj := &neonv1alpha1.Pageserver{}
+					if err := cli.Get(ctx, key, obj); err != nil {
+						return err
+					}
+					mutate(obj)
+					return cli.Update(ctx, obj)
+				}
+			}
+			updateSafekeeper := func(key types.NamespacedName, mutate func(*neonv1alpha1.Safekeeper)) func() error {
+				return func() error {
+					obj := &neonv1alpha1.Safekeeper{}
+					if err := cli.Get(ctx, key, obj); err != nil {
+						return err
+					}
+					mutate(obj)
+					return cli.Update(ctx, obj)
+				}
+			}
+
+			project := fixtures.NewProject("validation-project-update", namespace, "cluster-a")
+			project.Spec.TenantID = "00000000000000000000000000000001"
+			Expect(cli.Create(ctx, project)).To(Succeed())
+
+			projectKey := types.NamespacedName{Name: project.Name, Namespace: namespace}
+			expectInvalidUpdate("Project cluster immutability", updateProject(projectKey, func(p *neonv1alpha1.Project) {
+				p.Spec.ClusterName = validationUpdatedClusterName
+			}))
+			expectInvalidUpdate("Project tenantId immutability", updateProject(projectKey, func(p *neonv1alpha1.Project) {
+				p.Spec.TenantID = "00000000000000000000000000000002"
+			}))
+
+			branch := fixtures.NewBranch("validation-branch-update", namespace, "project-a")
+			branch.Spec.TimelineID = "00000000000000000000000000000001"
+			Expect(cli.Create(ctx, branch)).To(Succeed())
+
+			branchKey := types.NamespacedName{Name: branch.Name, Namespace: namespace}
+			expectInvalidUpdate("Branch projectID immutability", updateBranch(branchKey, func(b *neonv1alpha1.Branch) {
+				b.Spec.ProjectID = "project-b"
+			}))
+			expectInvalidUpdate("Branch timelineID immutability", updateBranch(branchKey, func(b *neonv1alpha1.Branch) {
+				b.Spec.TimelineID = "00000000000000000000000000000002"
+			}))
+
+			pageserver := fixtures.NewPageserver("validation-pageserver-update", namespace, "cluster-a", 0)
+			pageserver.Spec.StorageConfig.StorageClass = ptr.To("fast")
+			Expect(cli.Create(ctx, pageserver)).To(Succeed())
+
+			pageserverKey := types.NamespacedName{Name: pageserver.Name, Namespace: namespace}
+			expectInvalidUpdate("Pageserver id immutability", updatePageserver(pageserverKey, func(p *neonv1alpha1.Pageserver) {
+				p.Spec.ID = 1
+			}))
+			expectInvalidUpdate("Pageserver cluster immutability", updatePageserver(
+				pageserverKey,
+				func(p *neonv1alpha1.Pageserver) { p.Spec.Cluster = validationUpdatedClusterName },
+			))
+			expectInvalidUpdate("Pageserver storage size immutability", updatePageserver(
+				pageserverKey,
+				func(p *neonv1alpha1.Pageserver) { p.Spec.StorageConfig.Size = "2Gi" },
+			))
+			expectInvalidUpdate("Pageserver storage class immutability", updatePageserver(
+				pageserverKey,
+				func(p *neonv1alpha1.Pageserver) { p.Spec.StorageConfig.StorageClass = ptr.To("slow") },
+			))
+
+			safekeeper := fixtures.NewSafekeeper("validation-safekeeper-update", namespace, "cluster-a", 0)
+			safekeeper.Spec.StorageConfig.StorageClass = ptr.To("fast")
+			Expect(cli.Create(ctx, safekeeper)).To(Succeed())
+
+			safekeeperKey := types.NamespacedName{Name: safekeeper.Name, Namespace: namespace}
+			expectInvalidUpdate("Safekeeper id immutability", updateSafekeeper(safekeeperKey, func(s *neonv1alpha1.Safekeeper) {
+				s.Spec.ID = 1
+			}))
+			expectInvalidUpdate("Safekeeper cluster immutability", updateSafekeeper(
+				safekeeperKey,
+				func(s *neonv1alpha1.Safekeeper) { s.Spec.Cluster = validationUpdatedClusterName },
+			))
+			expectInvalidUpdate("Safekeeper storage size immutability", updateSafekeeper(
+				safekeeperKey,
+				func(s *neonv1alpha1.Safekeeper) { s.Spec.StorageConfig.Size = "2Gi" },
+			))
+			expectInvalidUpdate("Safekeeper storage class immutability", updateSafekeeper(
+				safekeeperKey,
+				func(s *neonv1alpha1.Safekeeper) { s.Spec.StorageConfig.StorageClass = ptr.To("slow") },
+			))
+		})
 	})
 
 	Context("Neon Lifecycle", func() {

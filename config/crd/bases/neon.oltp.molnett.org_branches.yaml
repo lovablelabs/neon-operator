@@ -50,23 +50,36 @@ spec:
             description: spec defines the desired state of Branch
             properties:
               pgVersion:
-                description: |-
-                  PGVersion specifies the PostgreSQL version to use for the branch.
-                  kubebuilder:validation:Enum=14;15;16;17
-                  kubebuilder:default:=17
+                default: 17
+                description: PGVersion specifies the PostgreSQL version to use for
+                  the branch.
+                enum:
+                - 14
+                - 15
+                - 16
+                - 17
                 type: integer
               projectID:
                 description: The ID of the Project this Branch belongs to
+                minLength: 1
                 type: string
               timelineID:
                 description: |-
                   Will be generated unless specified.
                   Has to be a 32 character alphanumeric string.
+                pattern: ^$|^[0-9a-f]{32}$
                 type: string
             required:
             - pgVersion
             - projectID
             type: object
+            x-kubernetes-validations:
+            - message: timelineID can be generated once, but cannot be changed after
+                it is set
+              rule: '!has(oldSelf.timelineID) || oldSelf.timelineID.size() == 0 ||
+                (has(self.timelineID) && self.timelineID == oldSelf.timelineID)'
+            - message: projectID is immutable
+              rule: self.projectID == oldSelf.projectID
           status:
             description: status defines the observed state of Branch
             properties:

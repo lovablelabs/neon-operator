@@ -22,12 +22,18 @@ import (
 )
 
 // PageserverSpec defines the desired state of Pageserver
+// +kubebuilder:validation:XValidation:rule="self.id == oldSelf.id",message="id is immutable"
+// +kubebuilder:validation:XValidation:rule="self.cluster == oldSelf.cluster",message="cluster is immutable"
+// +kubebuilder:validation:XValidation:rule="self.storageConfig.size == oldSelf.storageConfig.size",message="storageConfig.size is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.storageConfig.storageClass) == has(oldSelf.storageConfig.storageClass) && (!has(self.storageConfig.storageClass) || self.storageConfig.storageClass == oldSelf.storageConfig.storageClass)",message="storageConfig.storageClass is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.bucketCredentialsSecret.name) && self.bucketCredentialsSecret.name.size() > 0",message="bucketCredentialsSecret.name is required"
 type PageserverSpec struct {
 	// ID which the pageserver uses when registering with storage-controller
 	// This ID must be unique within the cluster.
 	ID uint64 `json:"id"`
 
 	// Used to deterministically setup which storage controller and broker to communicate with
+	// +kubebuilder:validation:MinLength:=1
 	Cluster string `json:"cluster"`
 
 	// Reference to a Secret containing credentials for accessing a storage bucket.
