@@ -22,6 +22,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	neonv1alpha1 "oltp.molnett.org/neon-operator/api/v1alpha1"
 	"oltp.molnett.org/neon-operator/test/fixtures"
@@ -63,11 +64,21 @@ var _ = Describe("API validation", func() {
 		project.Spec.TenantID = "00000000000000000000000000000001"
 		Expect(k8sClient.Create(ctx, project)).To(Succeed())
 
-		current := &neonv1alpha1.Project{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: project.Name, Namespace: namespace}, current)).To(Succeed())
-		current.Spec.TenantID = "00000000000000000000000000000002"
-
-		err := k8sClient.Update(ctx, current)
-		Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected invalid error, got %v", err)
+		invalid := false
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			current := &neonv1alpha1.Project{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: project.Name, Namespace: namespace}, current); err != nil {
+				return err
+			}
+			current.Spec.TenantID = "00000000000000000000000000000002"
+			err := k8sClient.Update(ctx, current)
+			if apierrors.IsInvalid(err) {
+				invalid = true
+				return nil
+			}
+			return err
+		})
+		Expect(err).NotTo(HaveOccurred(), "expected invalid error, got %v", err)
+		Expect(invalid).To(BeTrue(), "expected invalid error")
 	})
 })
